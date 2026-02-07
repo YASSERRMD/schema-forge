@@ -4,13 +4,13 @@ An intelligent CLI-based database agent that provides an interactive REPL for qu
 
 ## Features
 
-- 🗄️ **Multi-Database Support**: PostgreSQL, MySQL, SQLite, MSSQL
-- 🤖 **7 LLM Providers**: Anthropic Claude, OpenAI GPT, Groq, Cohere, xAI, Minimax, Qwen
-- 💬 **Natural Language Queries**: Ask questions in plain English, get SQL results
-- 📊 **Automatic Schema Indexing**: Introspects and understands your database structure
-- 🔄 **Interactive REPL**: rustyline-powered CLI with command history and tab completion
-- 🧠 **Smart SQL Generation**: LLM-powered natural language to SQL translation
-- ⚡ **Fast & Reliable**: Built with Rust, featuring retry logic and exponential backoff
+- **Multi-Database Support**: PostgreSQL, MySQL, SQLite, MSSQL
+- **8 LLM Providers**: Anthropic Claude, OpenAI GPT, Groq, Cohere, xAI, Minimax, Qwen, z.ai
+- **Natural Language Queries**: Ask questions in plain English, get SQL results
+- **Automatic Schema Indexing**: Introspects and understands your database structure
+- **Interactive REPL**: rustyline-powered CLI with command history and tab completion
+- **Smart SQL Generation**: LLM-powered natural language to SQL translation
+- **Fast & Reliable**: Built with Rust, featuring retry logic and exponential backoff
 
 ## Installation
 
@@ -152,6 +152,12 @@ Models: `abab6.5s-chat` (default), `abab5.5-chat`
 ```
 Models: `qwen-turbo` (default), `qwen-max`
 
+### z.ai
+```bash
+/config z.ai your-api-key-here
+```
+Models: `z-pro-v1` (default), `z-ultra-v2`
+
 ## Usage Examples
 
 ### Query Your Database
@@ -242,11 +248,11 @@ cargo build --release
 
 ## Project Status
 
-- ✅ **Phase 1**: Project scaffolding and core data structures
-- ✅ **Phase 2**: DatabaseManager and schema indexing system (PRIMARY TASK)
-- ✅ **Phase 3**: LLM integration with trait-based provider system
-- ✅ **Phase 4**: CLI REPL with rustyline and command handling
-- ✅ **Phase 5**: Integration testing and refinement
+- Phase 1: Project scaffolding and core data structures (COMPLETED)
+- Phase 2: DatabaseManager and schema indexing system (COMPLETED)
+- Phase 3: LLM integration with trait-based provider system (COMPLETED)
+- Phase 4: CLI REPL with rustyline and command handling (COMPLETED)
+- Phase 5: Integration testing and refinement (COMPLETED)
 
 ## Contributing
 
@@ -265,7 +271,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgments
 
 - Built with [Rust](https://www.rust-lang.org/)
-- LLM integration powered by [Anthropic](https://www.anthropic.com/), [OpenAI](https://openai.com/), [Groq](https://groq.com/), [Cohere](https://cohere.com/), [xAI](https://x.ai/), [Minimax](https://www.minimaxi.com/), and [Alibaba Qwen](https://tongyi.aliyun.com/)
+- LLM integration powered by [Anthropic](https://www.anthropic.com/), [OpenAI](https://openai.com/), [Groq](https://groq.com/), [Cohere](https://cohere.com/), [xAI](https://x.ai/), [Minimax](https://www.minimaxi.com/), [Alibaba Qwen](https://tongyi.aliyun.com/), and [z.ai](https://z.ai/)
 - Database access via [sqlx](https://github.com/launchbadge/sqlx) and [tiberius](https://github.com/prisma/tiberius)
 - CLI powered by [rustyline](https://github.com/kkawakam/rustyline)
 
@@ -275,4 +281,4 @@ Built by [YASSERRMD](https://github.com/YASSERRMD)
 
 ---
 
-**Schema-Forge**: Query your database with natural language. 🚀
+Schema-Forge: Query your database with natural language.
