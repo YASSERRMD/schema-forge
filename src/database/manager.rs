@@ -218,4 +218,14 @@ mod tests {
     fn test_invalid_url() {
         assert!(DatabaseBackend::from_url("invalid://url").is_err());
     }
+
+    // Note: Full integration tests with actual database connections
+    // require proper database setup. These can be run manually
+    // or with docker-compose for testing.
+    //
+    // The core functionality is verified through unit tests in:
+    // - database/schema: Schema structure tests
+    // - database/connection: Backend detection tests
+    // - database/indexer: Indexing logic tests
+    // - database/cache: Cache functionality tests
 }
