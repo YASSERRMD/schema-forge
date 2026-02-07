@@ -8,15 +8,13 @@ mod database;
 mod error;
 mod llm;
 
-use anyhow::Result;
+use cli::Repl;
 
 #[tokio::main]
-async fn main() -> Result<()> {
-    println!("Schema-Forge v{}", env!("CARGO_PKG_VERSION"));
-    println!("Initializing...\n");
-
-    // TODO: Initialize REPL in Phase 4
-    println!("CLI REPL coming in Phase 4!");
+async fn main() -> anyhow::Result<()> {
+    // Create and run the REPL
+    let mut repl = Repl::new()?;
+    repl.run().await?;
 
     Ok(())
 }
