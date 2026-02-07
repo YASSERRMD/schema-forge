@@ -3,7 +3,6 @@
 //! This module defines the core data structures for representing
 //! database schema information, including tables, columns, and their metadata.
 
-use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;

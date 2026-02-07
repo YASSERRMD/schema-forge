@@ -4,7 +4,6 @@
 //! Each database type has its own indexing function that queries the system catalogs
 //! and builds a complete SchemaIndex.
 
-use crate::database::connection::DatabaseBackend;
 use crate::database::schema::{Column, ColumnType, ForeignKeyReference, SchemaIndex, Table, TableRelationship};
 use crate::error::{Result, SchemaForgeError};
 use sqlx::{AnyPool, Row};

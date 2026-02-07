@@ -4,7 +4,7 @@
 //! to support multiple database types (PostgreSQL, MySQL, SQLite, MSSQL).
 
 use crate::error::{Result, SchemaForgeError};
-use sqlx::{any::AnyPoolOptions, AnyPool, Pool, Postgres, MySql, Sqlite, Any};
+use sqlx::{any::AnyPoolOptions, AnyPool};
 use std::str::FromStr;
 
 // MSSQL support via tiberius will be added in Phase 2.3

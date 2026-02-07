@@ -3,7 +3,6 @@
 //! This module implements all `/` commands for the Schema-Forge CLI.
 
 use crate::error::{Result, SchemaForgeError};
-use std::fmt;
 
 /// Command types
 #[derive(Debug, Clone, PartialEq)]
@@ -29,15 +28,12 @@ pub enum CommandType {
 pub struct Command {
     /// The type of command
     pub command_type: CommandType,
-    /// The raw input string
-    pub raw: String,
 }
 
 impl Command {
     /// Parse a command from user input
     pub fn parse(input: &str) -> Result<Self> {
         let input = input.trim();
-        let raw = input.to_string();
 
         // Check if it's a command (starts with /)
         if input.starts_with('/') {
@@ -55,12 +51,11 @@ impl Command {
                     let url = parts[1].to_string();
                     Ok(Command {
                         command_type: CommandType::Connect { url },
-                        raw,
                     })
                 }
                 "/index" => Ok(Command {
                     command_type: CommandType::Index,
-                    raw,
+                    
                 }),
                 "/config" => {
                     if parts.len() < 3 {
@@ -73,20 +68,20 @@ impl Command {
                     let key = parts[2].to_string();
                     Ok(Command {
                         command_type: CommandType::Config { provider, key },
-                        raw,
+                        
                     })
                 }
                 "/clear" => Ok(Command {
                     command_type: CommandType::Clear,
-                    raw,
+                    
                 }),
                 "/help" => Ok(Command {
                     command_type: CommandType::Help,
-                    raw,
+                    
                 }),
                 "/quit" | "/exit" => Ok(Command {
                     command_type: CommandType::Quit,
-                    raw,
+                    
                 }),
                 _ => Err(SchemaForgeError::UnknownCommand(cmd.to_string())),
             }
@@ -96,7 +91,7 @@ impl Command {
                 command_type: CommandType::Query {
                     text: input.to_string(),
                 },
-                raw,
+                
             })
         }
     }
@@ -179,14 +174,9 @@ Examples:
     }
 }
 
-/// Format a message for display
-pub fn format_message(message: &str) -> String {
-    message.to_string()
-}
-
 /// Format an error for display
 pub fn format_error(error: &SchemaForgeError) -> String {
-    format!("❌ Error: {}", error)
+    format!("Error: {}", error)
 }
 
 #[cfg(test)]

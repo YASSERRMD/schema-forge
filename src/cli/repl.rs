@@ -5,7 +5,7 @@
 use crate::cli::commands::{self, Command, format_error};
 use crate::error::Result;
 use rustyline::error::ReadlineError;
-use rustyline::{Cmd, CompletionType, Config, Editor};
+use rustyline::{CompletionType, Config, Editor};
 use rustyline::history::DefaultHistory;
 
 /// Schema-Forge REPL
@@ -60,8 +60,14 @@ impl Repl {
                         continue;
                     }
 
-                    // Add to history
-                    self.editor.add_history_entry(line);
+                    // Add to history (ignore result as history failure is non-critical)
+                    let _ = self.editor.add_history_entry(line);
+
+                    // Check for "/" command to show all available commands
+                    if line == "/" {
+                        self.show_all_commands();
+                        continue;
+                    }
 
                     // Parse and handle command
                     match Command::parse(line) {
@@ -91,13 +97,42 @@ impl Repl {
         Ok(())
     }
 
-    /// Print welcome message
+    /// Print welcome message with ASCII art banner
     fn print_welcome(&self) {
         println!();
-        println!("Schema-Forge v{}", env!("CARGO_PKG_VERSION"));
-        println!("Intelligent Database Query Agent");
+        println!(r#"   ____ _           _                  _       "#);
+        println!(r#"  / ___| |__   __ _| | ___ _ __   __ _| |      "#);
+        println!(r#" | |   | '_ \ / _` | |/ _ \ '_ \ / _` | |      "#);
+        println!(r#" | |___| | | | (_| | |  __/ | | | (_| | |      "#);
+        println!(r#"  \____|_| |_|\__,_|_|\___|_| |_|\__,_|_|      "#);
         println!();
-        println!("Type /help for available commands, or /quit to exit.");
+        println!("Intelligent Database Query Agent v{}", env!("CARGO_PKG_VERSION"));
+        println!();
+        println!("Type / for available commands, or /help for more information.");
+        println!();
+    }
+
+    /// Show all available commands (like Claude Code)
+    fn show_all_commands(&self) {
+        println!();
+        println!("Available Commands:");
+        println!();
+        println!("Database Commands:");
+        println!("  /connect <url>     Connect to a database");
+        println!("  /index             Index the database schema");
+        println!();
+        println!("Configuration:");
+        println!("  /config <provider> <key>  Set API key for LLM provider");
+        println!();
+        println!("Session:");
+        println!("  /clear             Clear chat context");
+        println!("  /help              Show detailed help");
+        println!("  /quit, /exit       Exit Schema-Forge");
+        println!();
+        println!("Supported LLM Providers:");
+        println!("  anthropic, openai, groq, cohere, xai, minimax, qwen, z.ai");
+        println!();
+        println!("Type /help <command> for more information on a specific command.");
         println!();
     }
 

@@ -6,7 +6,6 @@ use crate::error::{Result, SchemaForgeError};
 use crate::llm::client::LLMHttpClient;
 use crate::llm::provider::{GenerationParams, LLMResponse, LLMProvider, Message, MessageRole};
 use async_trait::async_trait;
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 
 /// OpenAI API base URL

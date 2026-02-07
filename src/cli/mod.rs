@@ -7,5 +7,4 @@ pub mod commands;
 pub mod repl;
 
 // Re-exports
-pub use commands::{Command, CommandType, handle_command};
 pub use repl::Repl;
