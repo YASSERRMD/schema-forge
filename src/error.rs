@@ -78,6 +78,10 @@ pub enum SchemaForgeError {
         body: String,
     },
 
+    /// Invalid header value
+    #[error("Invalid HTTP header: {0}")]
+    InvalidHeader(String),
+
     /// Serialization errors
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),

@@ -18,6 +18,7 @@ pub mod providers {
 }
 
 // Re-exports
+pub use client::{LLMHttpClient, RequestBody};
 pub use provider::{
     GenerationParams, LLMProvider, LLMProviderBuilder, LLMResponse, Message, MessageRole,
 };
