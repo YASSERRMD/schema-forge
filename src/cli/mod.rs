@@ -1,9 +1,11 @@
-//! CLI and REPL module
+//! CLI module
 //!
-//! This module handles the interactive command-line interface,
-//! including command parsing and the REPL loop.
+//! This module provides the command-line interface for Schema-Forge,
+//! including the REPL implementation and command handlers.
 
 pub mod commands;
 pub mod repl;
 
-// TODO: Add CLI-specific types and utilities in Phase 4
+// Re-exports
+pub use commands::{Command, CommandType, handle_command};
+pub use repl::Repl;
