@@ -10,4 +10,5 @@ pub mod schema;
 
 // Re-exports
 pub use connection::{DatabaseBackend, DatabasePool};
+pub use manager::DatabaseManager;
 pub use schema::{Column, ColumnType, ForeignKeyReference, SchemaIndex, Table, TableRelationship};
