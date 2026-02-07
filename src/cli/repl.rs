@@ -123,14 +123,13 @@ impl Repl {
         println!();
         println!("Configuration:");
         println!("  /config <provider> <key>  Set API key for LLM provider");
+        println!("  /providers         List all available LLM providers");
+        println!("  /model <provider> <model>  Set model for a provider");
         println!();
         println!("Session:");
         println!("  /clear             Clear chat context");
         println!("  /help              Show detailed help");
         println!("  /quit, /exit       Exit Schema-Forge");
-        println!();
-        println!("Supported LLM Providers:");
-        println!("  anthropic, openai, groq, cohere, xai, minimax, qwen, z.ai");
         println!();
         println!("Type /help <command> for more information on a specific command.");
         println!();

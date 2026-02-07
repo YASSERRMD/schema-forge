@@ -13,6 +13,10 @@ pub enum CommandType {
     Index,
     /// Set configuration (API keys)
     Config { provider: String, key: String },
+    /// List all available LLM providers
+    Providers,
+    /// Set model for a provider
+    Model { provider: String, model: String },
     /// Clear chat context
     Clear,
     /// Show help message
@@ -68,12 +72,26 @@ impl Command {
                     let key = parts[2].to_string();
                     Ok(Command {
                         command_type: CommandType::Config { provider, key },
-                        
+                    })
+                }
+                "/providers" => Ok(Command {
+                    command_type: CommandType::Providers,
+                }),
+                "/model" => {
+                    if parts.len() < 3 {
+                        return Err(SchemaForgeError::InvalidCommandSyntax {
+                            command: cmd.to_string(),
+                            expected: "/model <provider> <model>".to_string(),
+                        });
+                    }
+                    let provider = parts[1].to_string();
+                    let model = parts[2].to_string();
+                    Ok(Command {
+                        command_type: CommandType::Model { provider, model },
                     })
                 }
                 "/clear" => Ok(Command {
                     command_type: CommandType::Clear,
-                    
                 }),
                 "/help" => Ok(Command {
                     command_type: CommandType::Help,
@@ -111,7 +129,7 @@ pub async fn handle_command(
                 || url.starts_with("mssql://")
                 || url.starts_with("sqlserver://")
             {
-                Ok(format!("✓ Connected to database: {}", url))
+                Ok(format!("Connected to database: {}", url))
             } else {
                 Err(SchemaForgeError::InvalidInput(format!(
                     "Invalid database URL: {}. Supported: postgresql://, mysql://, sqlite://, mssql://",
@@ -120,7 +138,7 @@ pub async fn handle_command(
             }
         }
         CommandType::Index => {
-            Ok("✓ Database indexed successfully".to_string())
+            Ok("Database indexed successfully".to_string())
         }
         CommandType::Config { provider, key } => {
             // Store the API key (actual storage to be implemented)
@@ -130,12 +148,56 @@ pub async fn handle_command(
                 "***".to_string()
             };
             Ok(format!(
-                "✓ API key configured for provider: {} ({})",
+                "API key configured for provider: {} ({})",
                 provider, masked_key
             ))
         }
+        CommandType::Providers => {
+            let providers = r#"
+Available LLM Providers:
+
+Anthropic:
+  Models: claude-3-5-sonnet-20241022, claude-3-opus
+  Config: /config anthropic <api-key>
+
+OpenAI:
+  Models: gpt-4o-mini, gpt-4, gpt-3.5-turbo
+  Config: /config openai <api-key>
+
+Groq:
+  Models: llama3-70b-8192, mixtral-8x7b-32768
+  Config: /config groq <api-key>
+
+Cohere:
+  Models: command-r-plus, command-r
+  Config: /config cohere <api-key>
+
+xAI:
+  Models: grok-beta, grok-2
+  Config: /config xai <api-key>
+
+Minimax:
+  Models: abab6.5s-chat, abab5.5-chat
+  Config: /config minimax <api-key>
+
+Qwen:
+  Models: qwen-turbo, qwen-max
+  Config: /config qwen <api-key>
+
+z.ai:
+  Models: z-pro-v1, z-ultra-v2
+  Config: /config z.ai <api-key>
+
+Set a specific model:
+  /model <provider> <model-name>
+"#;
+            Ok(providers.to_string())
+        }
+        CommandType::Model { provider, model } => {
+            Ok(format!("Model '{}' set for provider '{}'", model, provider))
+        }
         CommandType::Clear => {
-            Ok("✓ Chat context cleared".to_string())
+            Ok("Chat context cleared".to_string())
         }
         CommandType::Help => {
             let help = r#"
@@ -147,6 +209,8 @@ Database Commands:
 
 Configuration:
   /config <provider> <key>  Set API key for LLM provider
+  /providers         List all available LLM providers
+  /model <provider> <model>  Set model for a provider
 
 Session:
   /clear             Clear chat context
@@ -160,6 +224,8 @@ Examples:
   /connect postgresql://localhost/mydb
   /index
   /config anthropic sk-ant-...
+  /providers
+  /model openai gpt-4
   Show me all users in the customers table
 "#;
             Ok(help.to_string())
@@ -256,6 +322,30 @@ mod tests {
         assert!(result.is_err());
 
         let result = Command::parse("/config anthropic");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_providers_command() {
+        let cmd = Command::parse("/providers").unwrap();
+        assert_eq!(cmd.command_type, CommandType::Providers);
+    }
+
+    #[test]
+    fn test_parse_model_command() {
+        let cmd = Command::parse("/model openai gpt-4").unwrap();
+        assert_eq!(
+            cmd.command_type,
+            CommandType::Model {
+                provider: "openai".to_string(),
+                model: "gpt-4".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_model_missing_args() {
+        let result = Command::parse("/model openai");
         assert!(result.is_err());
     }
 }
