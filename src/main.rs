@@ -2,6 +2,10 @@
 //
 // This is the main entry point for the Schema-Forge application.
 
+// Allow dead code for API response fields and trait implementations
+#![allow(dead_code)]
+#![warn(unused_imports)]
+
 mod cli;
 mod config;
 mod database;
