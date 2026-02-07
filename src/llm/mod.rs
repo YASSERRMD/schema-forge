@@ -17,4 +17,7 @@ pub mod providers {
     pub mod xai;
 }
 
-// TODO: Add LLM-specific types and utilities
+// Re-exports
+pub use provider::{
+    GenerationParams, LLMProvider, LLMProviderBuilder, LLMResponse, Message, MessageRole,
+};
