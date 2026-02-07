@@ -6,7 +6,6 @@
 use crate::database::connection::{DatabaseBackend, DatabasePool};
 use crate::database::schema::SchemaIndex;
 use crate::error::{Result, SchemaForgeError};
-use sqlx::Row;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -176,95 +175,31 @@ impl DatabaseManager {
         let pool = self.pool.as_any().ok_or_else(|| {
             SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
         })?;
-
-        let mut schema_index = SchemaIndex::new();
-
-        // Get database name
-        let db_row: Option<(String,)> = sqlx::query_as("SELECT current_database()")
-            .fetch_optional(pool)
-            .await?;
-        if let Some((db_name,)) = db_row {
-            schema_index.database_name = Some(db_name);
-        }
-        schema_index.schema_name = Some("public".to_string());
-
-        // Query all tables and views
-        let tables_query = r#"
-            SELECT
-                table_name,
-                table_type,
-                obj_description((table_schema||'.'||table_name)::regclass, 'pg_class') as comment
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
-            ORDER BY table_name
-        "#;
-
-        let tables_rows = sqlx::query(tables_query)
-            .fetch_all(pool)
-            .await
-            .map_err(|e| SchemaForgeError::db_query(tables_query, e))?;
-
-        for row in tables_rows {
-            let table_name: String = row.get("table_name");
-            let table_type: String = row.get("table_type");
-            let comment: Option<String> = row.get("comment");
-
-            // Query columns for this table
-            let columns_query = r#"
-                SELECT
-                    column_name,
-                    data_type,
-                    character_maximum_length,
-                    numeric_precision,
-                    numeric_scale,
-                    is_nullable,
-                    column_default,
-                    ordinal_position
-                FROM information_schema.columns
-                WHERE table_schema = 'public'
-                    AND table_name = $1
-                ORDER BY ordinal_position
-            "#;
-
-            let columns_rows = sqlx::query(columns_query)
-                .bind(&table_name)
-                .fetch_all(pool)
-                .await
-                .map_err(|e| SchemaForgeError::db_query(columns_query, e))?;
-
-            // TODO: Build table structure with columns
-            // This will be completed in task 2.3
-            let _ = (table_name, table_type, comment, columns_rows);
-        }
-
-        // TODO: Query primary keys, foreign keys, and constraints
-        // This will be completed in task 2.3
-
-        Ok(schema_index)
+        crate::database::indexer::index_postgresql(pool).await
     }
 
     /// Index MySQL database schema
     async fn index_mysql(&self) -> Result<SchemaIndex> {
-        // TODO: Implement in task 2.3
-        Err(SchemaForgeError::SchemaIndexing(
-            "MySQL indexing not yet implemented".to_string(),
-        ))
+        let pool = self.pool.as_any().ok_or_else(|| {
+            SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
+        })?;
+        crate::database::indexer::index_mysql(pool).await
     }
 
     /// Index SQLite database schema
     async fn index_sqlite(&self) -> Result<SchemaIndex> {
-        // TODO: Implement in task 2.3
-        Err(SchemaForgeError::SchemaIndexing(
-            "SQLite indexing not yet implemented".to_string(),
-        ))
+        let pool = self.pool.as_any().ok_or_else(|| {
+            SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
+        })?;
+        crate::database::indexer::index_sqlite(pool).await
     }
 
     /// Index MSSQL database schema
     async fn index_mssql(&self) -> Result<SchemaIndex> {
-        // TODO: Implement in task 2.3
-        Err(SchemaForgeError::SchemaIndexing(
-            "MSSQL indexing not yet implemented".to_string(),
-        ))
+        let pool = self.pool.as_any().ok_or_else(|| {
+            SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
+        })?;
+        crate::database::indexer::index_mssql(pool).await
     }
 }
 
