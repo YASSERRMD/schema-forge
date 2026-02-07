@@ -15,6 +15,9 @@ pub mod providers {
     pub mod openai;
     pub mod qwen;
     pub mod xai;
+
+    // Re-export provider implementations
+    pub use anthropic::AnthropicProvider;
 }
 
 // Re-exports
