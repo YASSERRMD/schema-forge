@@ -18,7 +18,12 @@ pub mod providers {
 
     // Re-export provider implementations
     pub use anthropic::AnthropicProvider;
+    pub use cohere::CohereProvider;
+    pub use groq::GroqProvider;
+    pub use minimax::MinimaxProvider;
     pub use openai::OpenAIProvider;
+    pub use qwen::QwenProvider;
+    pub use xai::XAIProvider;
 }
 
 // Re-exports
