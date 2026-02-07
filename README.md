@@ -20,6 +20,56 @@ An intelligent CLI-based database agent that provides an interactive REPL for qu
 - A database (PostgreSQL, MySQL, SQLite, or MSSQL)
 - API key for your preferred LLM provider
 
+#### System Dependencies
+
+Schema-Forge requires native database libraries to be installed on your system:
+
+**macOS:**
+```bash
+# PostgreSQL
+brew install postgresql
+
+# MySQL
+brew install mysql
+
+# SQLite (usually pre-installed)
+```
+
+**Ubuntu/Debian:**
+```bash
+# PostgreSQL
+sudo apt-get install libpq-dev
+
+# MySQL
+sudo apt-get install libmysqlclient-dev
+
+# SQLite
+sudo apt-get install libsqlite3-dev
+```
+
+**Fedora/RHEL:**
+```bash
+# PostgreSQL
+sudo dnf install postgresql-devel
+
+# MySQL
+sudo dnf install mysql-devel
+
+# SQLite
+sudo dnf install sqlite-devel
+```
+
+**Arch Linux:**
+```bash
+# PostgreSQL
+sudo pacman -S postgresql-libs
+
+# MySQL
+sudo pacman -S mysql
+
+# SQLite (usually pre-installed)
+```
+
 ### Build from Source
 
 ```bash
@@ -191,6 +241,68 @@ The `/index` command scans your database and provides LLMs with complete schema 
 - Primary keys and unique constraints
 - Foreign key relationships
 - Default values
+
+## Troubleshooting
+
+### "No drivers installed" Error
+
+If you see this error when connecting to a database, it means the native database libraries are not installed on your system. See the [System Dependencies](#system-dependencies) section above.
+
+### Quick Testing with SQLite
+
+For easy testing without installing any database servers, use SQLite:
+
+```bash
+# Create a test SQLite database
+sqlite3 test.db "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, email TEXT);"
+sqlite3 test.db "INSERT INTO users VALUES (1, 'Alice', 'alice@example.com'), (2, 'Bob', 'bob@example.com');"
+
+# Connect with Schema-Forge
+> /connect sqlite://test.db
+
+# Index the schema
+> /index
+
+# Query it
+> show me all users
+```
+
+SQLite requires no external dependencies - the library is bundled with Schema-Forge.
+
+### Database Connection Errors
+
+If you're having trouble connecting:
+
+1. **Check the database is running**:
+   ```bash
+   # PostgreSQL
+   pg_isready -h localhost -p 5432
+
+   # MySQL
+   mysqladmin ping -h localhost -P 3306
+   ```
+
+2. **Verify credentials**: Make sure the username and password in your connection URL are correct
+
+3. **Check database exists**: The database must be created before you can connect to it
+
+4. **Firewall issues**: Ensure the database port is accessible
+
+### LLM API Errors
+
+If you get API errors:
+
+1. **Verify API key**: Make sure you copied the entire key with no extra spaces
+2. **Check provider status**: Visit the provider's status page
+3. **Test the key**: Use `curl` to verify the key works:
+   ```bash
+   # Test Anthropic key
+   curl https://api.anthropic.com/v1/messages \
+     -H "x-api-key: $ANTHROPIC_API_KEY" \
+     -H "anthropic-version: 2023-06-01" \
+     -H "content-type: application/json" \
+     -d '{"model": "claude-3-5-sonnet-20241022", "max_tokens": 10, "messages": [{"role": "user", "content": "Hi"}]}'
+   ```
 
 ## Architecture
 

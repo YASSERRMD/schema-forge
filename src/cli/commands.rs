@@ -2,6 +2,7 @@
 //!
 //! This module implements all `/` commands for the Schema-Forge CLI.
 
+use crate::config::SharedState;
 use crate::error::{Result, SchemaForgeError};
 
 /// Command types
@@ -118,35 +119,58 @@ impl Command {
 /// Handle a command and return the result message
 pub async fn handle_command(
     command: &Command,
+    state: SharedState,
 ) -> Result<String> {
     match &command.command_type {
         CommandType::Connect { url } => {
             // Validate the connection URL format
-            if url.starts_with("postgresql://")
-                || url.starts_with("postgres://")
-                || url.starts_with("mysql://")
-                || url.starts_with("sqlite://")
-                || url.starts_with("mssql://")
-                || url.starts_with("sqlserver://")
+            if !url.starts_with("postgresql://")
+                && !url.starts_with("postgres://")
+                && !url.starts_with("mysql://")
+                && !url.starts_with("sqlite://")
+                && !url.starts_with("mssql://")
+                && !url.starts_with("sqlserver://")
             {
-                Ok(format!("Connected to database: {}", url))
-            } else {
-                Err(SchemaForgeError::InvalidInput(format!(
+                return Err(SchemaForgeError::InvalidInput(format!(
                     "Invalid database URL: {}. Supported: postgresql://, mysql://, sqlite://, mssql://",
                     url
-                )))
+                )));
             }
+
+            // Actually connect to the database
+            let manager = crate::database::manager::DatabaseManager::connect(url).await?;
+
+            // Store the database manager in state
+            let mut state_guard = state.write().await;
+            state_guard.set_database_manager(manager);
+
+            Ok(format!("Connected to database: {}", url))
         }
         CommandType::Index => {
-            Ok("Database indexed successfully".to_string())
+            // Check if database is connected
+            let state_guard = state.read().await;
+            let db_manager = state_guard.database_manager.as_ref()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("Not connected to any database. Use /connect first.".to_string()))?;
+
+            // Actually index the database
+            let schema_index = db_manager.index_database().await?;
+
+            let table_count = schema_index.tables.len();
+            let column_count: usize = schema_index.tables.values().map(|t| t.columns.len()).sum();
+
+            Ok(format!("Database indexed successfully: {} tables, {} columns", table_count, column_count))
         }
         CommandType::Config { provider, key } => {
-            // Store the API key (actual storage to be implemented)
+            // Store the API key in state
             let masked_key = if key.len() > 8 {
                 format!("{}...{}", &key[..4], &key[key.len() - 4..])
             } else {
                 "***".to_string()
             };
+
+            let mut state_guard = state.write().await;
+            state_guard.set_api_key(provider.clone(), key.clone());
+
             Ok(format!(
                 "API key configured for provider: {} ({})",
                 provider, masked_key
@@ -194,9 +218,23 @@ Set a specific model:
             Ok(providers.to_string())
         }
         CommandType::Model { provider, model } => {
+            // Store the model preference in state
+            let state_guard = state.write().await;
+
+            // Validate provider exists
+            if !state_guard.api_keys.contains_key(provider) {
+                return Err(SchemaForgeError::InvalidInput(format!(
+                    "Provider '{}' not configured. Use /config {} <api-key> first.",
+                    provider, provider
+                )));
+            }
+
+            // Store model preference (we'll need to add this to AppState)
+            // For now, just acknowledge
             Ok(format!("Model '{}' set for provider '{}'", model, provider))
         }
         CommandType::Clear => {
+            // Clear chat context (to be implemented with message history)
             Ok("Chat context cleared".to_string())
         }
         CommandType::Help => {
@@ -234,8 +272,46 @@ Examples:
             Ok("Goodbye!".to_string())
         }
         CommandType::Query { text } => {
-            // Process natural language query
-            Ok(format!("Query: {}", text))
+            // This is a natural language query - process it using LLM
+            let state_guard = state.read().await;
+
+            // Check if database is connected
+            let db_manager = state_guard.database_manager.as_ref()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("Not connected to any database. Use /connect first.".to_string()))?;
+
+            // Check if an LLM provider is configured
+            let current_provider = state_guard.get_current_provider()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("No LLM provider configured. Use /config <provider> <api-key> first.".to_string()))?
+                .clone();
+
+            let api_key = state_guard.get_api_key(&current_provider)
+                .ok_or_else(|| SchemaForgeError::InvalidInput(format!("API key not found for provider '{}'", current_provider)))?
+                .clone();
+
+            // Get schema context
+            let schema_context = db_manager.get_context_for_llm();
+
+            // Drop the read guard before we make the async LLM call
+            drop(state_guard);
+
+            // Create the appropriate LLM provider
+            let provider = create_llm_provider(&current_provider, &api_key)?;
+
+            // Generate SQL from natural language
+            let sql_query = provider.generate_sql(&schema_context, text).await.map_err(|e| {
+                SchemaForgeError::LLMApiError {
+                    provider: current_provider.clone(),
+                    message: format!("Failed to generate SQL: {}", e),
+                    status: 0,
+                }
+            })?;
+
+            // Execute the SQL query
+            let state_guard = state.read().await;
+            let db_manager = state_guard.database_manager.as_ref().unwrap();
+            let results = execute_sql_query(db_manager, &sql_query).await?;
+
+            Ok(format!("SQL:\n{}\n\nResults:\n{}", sql_query, results))
         }
     }
 }
@@ -243,6 +319,121 @@ Examples:
 /// Format an error for display
 pub fn format_error(error: &SchemaForgeError) -> String {
     format!("Error: {}", error)
+}
+
+/// Create an LLM provider instance based on provider name
+fn create_llm_provider(provider: &str, api_key: &str) -> Result<Box<dyn crate::llm::provider::LLMProvider>> {
+    match provider.to_lowercase().as_str() {
+        "anthropic" => {
+            Ok(Box::new(crate::llm::providers::anthropic::AnthropicProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        "openai" => {
+            Ok(Box::new(crate::llm::providers::openai::OpenAIProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        "groq" => {
+            Ok(Box::new(crate::llm::providers::groq::GroqProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        "cohere" => {
+            Ok(Box::new(crate::llm::providers::cohere::CohereProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        "xai" => {
+            Ok(Box::new(crate::llm::providers::xai::XAIProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        "minimax" => {
+            Ok(Box::new(crate::llm::providers::minimax::MinimaxProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        "qwen" => {
+            Ok(Box::new(crate::llm::providers::qwen::QwenProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        "z.ai" | "zai" => {
+            Ok(Box::new(crate::llm::providers::zai::ZAIProvider::new(
+                api_key,
+                None,
+            )))
+        }
+        _ => Err(SchemaForgeError::InvalidInput(format!(
+            "Unknown provider: '{}'. Supported: anthropic, openai, groq, cohere, xai, minimax, qwen, z.ai",
+            provider
+        ))),
+    }
+}
+
+/// Execute a SQL query and format results
+async fn execute_sql_query(
+    db_manager: &crate::database::manager::DatabaseManager,
+    sql: &str,
+) -> Result<String> {
+    use sqlx::Row;
+
+    let pool = db_manager.pool().as_any().ok_or_else(|| {
+        SchemaForgeError::InvalidInput("Failed to get database pool".to_string())
+    })?;
+
+    // Execute the query
+    let rows = sqlx::query(sql).fetch_all(pool).await?;
+
+    if rows.is_empty() {
+        return Ok("No results found.".to_string());
+    }
+
+    // Format results
+    let mut output = String::new();
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 && i < 10 {
+            // Limit to 10 rows for display
+            output.push_str("\n");
+        }
+        if i >= 10 {
+            output.push_str(&format!("\n... and {} more rows", rows.len() - 10));
+            break;
+        }
+
+        // Get column values
+        let columns = row.columns();
+        let values: Vec<String> = columns
+            .iter()
+            .enumerate()
+            .map(|(j, _col)| {
+                // Try to get the value as different types
+                if let Ok(val) = row.try_get::<String, _>(j) {
+                    val
+                } else if let Ok(val) = row.try_get::<i64, _>(j) {
+                    val.to_string()
+                } else if let Ok(val) = row.try_get::<f64, _>(j) {
+                    val.to_string()
+                } else if let Ok(val) = row.try_get::<bool, _>(j) {
+                    val.to_string()
+                } else {
+                    "NULL".to_string()
+                }
+            })
+            .collect();
+
+        output.push_str(&format!("Row {}: {}", i + 1, values.join(" | ")));
+    }
+
+    Ok(output)
 }
 
 #[cfg(test)]

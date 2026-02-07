@@ -3,6 +3,7 @@
 //! This module implements the interactive Read-Eval-Print Loop for Schema-Forge.
 
 use crate::cli::commands::{self, Command, format_error};
+use crate::config::SharedState;
 use crate::error::Result;
 use rustyline::error::ReadlineError;
 use rustyline::{CompletionType, Config, Editor};
@@ -14,11 +15,13 @@ pub struct Repl {
     editor: Editor<(), DefaultHistory>,
     /// Whether the REPL should continue running
     running: bool,
+    /// Shared application state
+    state: SharedState,
 }
 
 impl Repl {
     /// Create a new REPL instance
-    pub fn new() -> Result<Self> {
+    pub fn new(state: SharedState) -> Result<Self> {
         let config = Config::builder()
             .history_ignore_space(true)
             .completion_type(CompletionType::List)
@@ -45,6 +48,7 @@ impl Repl {
         Ok(Self {
             editor,
             running: true,
+            state,
         })
     }
 
@@ -139,13 +143,13 @@ impl Repl {
     async fn handle_command(&mut self, command: Command) {
         match &command.command_type {
             commands::CommandType::Quit => {
-                if let Ok(msg) = commands::handle_command(&command).await {
+                if let Ok(msg) = commands::handle_command(&command, self.state.clone()).await {
                     println!("{}", msg);
                 }
                 self.running = false;
             }
             _ => {
-                match commands::handle_command(&command).await {
+                match commands::handle_command(&command, self.state.clone()).await {
                     Ok(msg) => {
                         println!("{}", msg);
                     }
@@ -160,7 +164,7 @@ impl Repl {
 
 impl Default for Repl {
     fn default() -> Self {
-        Self::new().expect("Failed to create REPL")
+        Self::new(crate::config::create_shared_state()).expect("Failed to create REPL")
     }
 }
 
@@ -170,7 +174,8 @@ mod tests {
 
     #[test]
     fn test_repl_creation() {
-        let repl = Repl::new();
+        let state = crate::config::create_shared_state();
+        let repl = Repl::new(state);
         assert!(repl.is_ok());
         let repl = repl.unwrap();
         assert!(repl.running);

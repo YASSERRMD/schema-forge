@@ -9,11 +9,15 @@ mod error;
 mod llm;
 
 use cli::Repl;
+use config::create_shared_state;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Create shared application state
+    let state = create_shared_state();
+
     // Create and run the REPL
-    let mut repl = Repl::new()?;
+    let mut repl = Repl::new(state)?;
     repl.run().await?;
 
     Ok(())
