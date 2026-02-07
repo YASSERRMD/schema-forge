@@ -47,6 +47,10 @@ chrono = { version = "0.4", features = ["serde"] }
 # Platform-specific directories
 dirs = "5.0"
 
+[lib]
+name = "schema_forge"
+path = "src/lib.rs"
+
 [dev-dependencies]
 tokio-test = "0.4"
 
