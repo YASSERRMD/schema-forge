@@ -44,6 +44,9 @@ comfy-table = "7.1"
 # Date/time handling
 chrono = { version = "0.4", features = ["serde"] }
 
+# Platform-specific directories
+dirs = "5.0"
+
 [dev-dependencies]
 tokio-test = "0.4"
 
