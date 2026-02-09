@@ -8,11 +8,66 @@ use crate::error::Result;
 use rustyline::error::ReadlineError;
 use rustyline::{CompletionType, Config, Editor};
 use rustyline::history::DefaultHistory;
+use rustyline::completion::Completer;
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::validate::Validator;
+use rustyline::Helper;
+use rustyline::Context;
+
+/// Schema-Forge command completer
+struct SchemaForgeCompleter;
+
+impl Completer for SchemaForgeCompleter {
+    type Candidate = String;
+
+    fn complete(
+        &self,
+        line: &str,
+        _pos: usize,
+        _ctx: &Context<'_>,
+    ) -> std::result::Result<(usize, Vec<String>), ReadlineError> {
+        let commands = vec![
+            "/connect",
+            "/index",
+            "/config",
+            "/providers",
+            "/use",
+            "/model",
+            "/clear",
+            "/help",
+            "/quit",
+            "/exit",
+        ];
+
+        // If line starts with /, show all commands
+        if line.starts_with('/') {
+            let matches: Vec<String> = commands
+                .into_iter()
+                .filter(|cmd| cmd.starts_with(line))
+                .map(|s| s.to_string())
+                .collect();
+            Ok((0, matches))
+        } else {
+            Ok((0, vec![]))
+        }
+    }
+}
+
+impl Hinter for SchemaForgeCompleter {
+    type Hint = String;
+}
+
+impl Highlighter for SchemaForgeCompleter {}
+
+impl Validator for SchemaForgeCompleter {}
+
+impl Helper for SchemaForgeCompleter {}
 
 /// Schema-Forge REPL
 pub struct Repl {
     /// The rustyline editor
-    editor: Editor<(), DefaultHistory>,
+    editor: Editor<SchemaForgeCompleter, DefaultHistory>,
     /// Whether the REPL should continue running
     running: bool,
     /// Shared application state
@@ -28,12 +83,15 @@ impl Repl {
             .auto_add_history(true)
             .build();
 
-        let mut editor = Editor::<(), DefaultHistory>::with_config(config).map_err(|e| {
+        let completer = SchemaForgeCompleter;
+        let mut editor = Editor::<SchemaForgeCompleter, DefaultHistory>::with_config(config).map_err(|e| {
             crate::error::SchemaForgeError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 format!("Failed to initialize editor: {}", e),
             ))
         })?;
+
+        editor.set_helper(Some(completer));
 
         // Set history file
         let history_path = dirs::home_dir()
