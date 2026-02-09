@@ -16,6 +16,8 @@ pub enum CommandType {
     Config { provider: String, key: String },
     /// List all available LLM providers
     Providers,
+    /// Switch to a different provider
+    Use { provider: String },
     /// Set model for a provider
     Model { provider: String, model: String },
     /// Clear chat context
@@ -89,6 +91,18 @@ impl Command {
                     let model = parts[2].to_string();
                     Ok(Command {
                         command_type: CommandType::Model { provider, model },
+                    })
+                }
+                "/use" => {
+                    if parts.len() < 2 {
+                        return Err(SchemaForgeError::InvalidCommandSyntax {
+                            command: cmd.to_string(),
+                            expected: "/use <provider>".to_string(),
+                        });
+                    }
+                    let provider = parts[1].to_string();
+                    Ok(Command {
+                        command_type: CommandType::Use { provider },
                     })
                 }
                 "/clear" => Ok(Command {
@@ -263,6 +277,23 @@ Set a specific model:
 
             Ok(format!("Model '{}' set for provider '{}' (saved)", model, provider))
         }
+        CommandType::Use { provider } => {
+            // Switch to a different provider
+            let mut state_guard = state.write().await;
+
+            // Validate provider exists
+            if !state_guard.api_keys.contains_key(provider) {
+                return Err(SchemaForgeError::InvalidInput(format!(
+                    "Provider '{}' not configured. Use /config {} <api-key> first.",
+                    provider, provider
+                )));
+            }
+
+            // Switch to this provider
+            state_guard.set_current_provider(provider.clone());
+
+            Ok(format!("Switched to provider: {} (saved)", provider))
+        }
         CommandType::Clear => {
             // Clear chat context (to be implemented with message history)
             Ok("Chat context cleared".to_string())
@@ -278,6 +309,7 @@ Database Commands:
 Configuration:
   /config <provider> <key>  Set API key for LLM provider
   /providers         List all available LLM providers
+  /use <provider>    Switch to a different LLM provider
   /model <provider> <model>  Set model for a provider
 
 Session:

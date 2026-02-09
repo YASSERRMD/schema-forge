@@ -128,6 +128,7 @@ impl Repl {
         println!("Configuration:");
         println!("  /config <provider> <key>  Set API key for LLM provider");
         println!("  /providers         List all available LLM providers");
+        println!("  /use <provider>    Switch to a different LLM provider");
         println!("  /model <provider> <model>  Set model for a provider");
         println!();
         println!("Session:");

@@ -51,10 +51,8 @@ impl AppState {
     /// Store an API key for a provider and save to disk
     pub fn set_api_key(&mut self, provider: String, key: String) {
         self.api_keys.insert(provider.clone(), key);
-        // If this is the first provider, make it the current one
-        if self.current_provider.is_none() {
-            self.current_provider = Some(provider.clone());
-        }
+        // Always make the newly configured provider the current one
+        self.current_provider = Some(provider.clone());
         // Save to disk
         let _ = self.save();
     }
