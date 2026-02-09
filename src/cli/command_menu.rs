@@ -4,7 +4,7 @@
 
 use ratatui::{
     crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
@@ -145,20 +145,32 @@ fn run_menu(
 fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
     let size = f.area();
 
-    // Create layout: main popup in center
-    let popup_width = std::cmp::min(80, size.width - 4);
-    let popup_height = std::cmp::min(20, size.height - 4);
-
+    // Create layout: main popup in center with header and scrollable list
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(popup_height),
-            Constraint::Min(0),
+            Constraint::Length(3),  // Fixed header height
+            Constraint::Min(5),     // Scrollable command list
+            Constraint::Length(3),  // Fixed help text
         ])
         .split(size);
 
-    // Command list
+    // Header block (fixed, doesn't scroll)
+    let header = Paragraph::new(vec![
+        Line::from(" ⚡ Schema-Forge ").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Line::from(""),
+    ])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+        )
+        .alignment(Alignment::Center);
+
+    f.render_widget(header, chunks[0]);
+
+    // Command list (scrollable)
     let items: Vec<ListItem> = commands
         .iter()
         .enumerate()
@@ -185,8 +197,6 @@ fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title(" ⚡ Schema-Forge ")
-                .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         )
         .highlight_style(
             Style::default()
@@ -195,24 +205,22 @@ fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
                 .bg(Color::Cyan)
         );
 
-    f.render_widget(list, chunks[0]);
+    f.render_widget(list, chunks[1]);
 
-    // Help text at bottom
+    // Help text at bottom (fixed, doesn't scroll)
     let help_text = vec![
-        Line::from(" ↑/k: Up  ↓/j: Down  Enter: Select  ESC/q: Cancel  /: Type command "),
+        Line::from(" ↑/k: Up  ↓/j: Down  Enter: Select  ESC/q: Cancel  /: Type command ")
+            .style(Style::default().fg(Color::Gray)),
     ];
 
     let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::Gray))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+        )
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
 
-    let help_area = Rect {
-        x: chunks[0].x,
-        y: chunks[0].y + chunks[0].height - 3,
-        width: chunks[0].width,
-        height: 3,
-    };
-
-    f.render_widget(help, help_area);
+    f.render_widget(help, chunks[2]);
 }
