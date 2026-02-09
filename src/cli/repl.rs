@@ -216,11 +216,16 @@ impl Repl {
     /// Print welcome message with ASCII art banner
     fn print_welcome(&self) {
         println!();
-        println!(r#"   ____ _           _                  _       "#);
-        println!(r#"  / ___| |__   __ _| | ___ _ __   __ _| |      "#);
-        println!(r#" | |   | '_ \ / _` | |/ _ \ '_ \ / _` | |      "#);
-        println!(r#" | |___| | | | (_| | |  __/ | | | (_| | |      "#);
-        println!(r#"  \____|_| |_|\__,_|_|\___|_| |_|\__,_|_|      "#);
+        println!("  __  __         _                                      ");
+        println!(" |  \\/  |__ _ __| |_  ___ _ __                         ");
+        println!(" | |\\/| / _` / _/ \\/ / _ \\ '  \\                        ");
+        println!(" |_|  |_\\__,_\\__|_\\_\\\\___/_|_|_|                        ");
+        println!("                                                       ");
+        println!(" ____                                          _      ");
+        println!("|  _ \\ _ __ ___ _ __  _ __ ___   ___ _ __ __ _| |     ");
+        println!("| |_) | '__/ _ \\ '_ \\| '_ ` _ \\ / _ \\ '__/ _` | |     ");
+        println!("|  __/| | |  __/ | | | | | | | |  __/ | | (_| | |     ");
+        println!("|_|   |_|  \\___|_| |_|_| |_| |_|\\___|_|  \\__,_|_|     ");
         println!();
         println!("Intelligent Database Query Agent v{}", env!("CARGO_PKG_VERSION"));
         println!();
