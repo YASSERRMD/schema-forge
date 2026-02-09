@@ -59,10 +59,6 @@ impl Repl {
         while self.running {
             match self.editor.readline("> ") {
                 Ok(line) => {
-                    // Debug: Print raw input to diagnose issues
-                    eprintln!("DEBUG: Raw input bytes: {:?}", line.as_bytes());
-                    eprintln!("DEBUG: Raw input repr: {:?}", line);
-
                     let line = line.trim();
 
                     if line.is_empty() {
@@ -71,13 +67,6 @@ impl Repl {
 
                     // Add to history (ignore result as history failure is non-critical)
                     let _ = self.editor.add_history_entry(line);
-
-                    // Check for "/" command to show all available commands
-                    if line == "/" {
-                        eprintln!("DEBUG: Detected '/' command!");
-                        self.show_all_commands();
-                        continue;
-                    }
 
                     // Parse and handle command
                     match Command::parse(line) {

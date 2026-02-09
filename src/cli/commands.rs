@@ -110,9 +110,9 @@ impl Command {
                 "/clear" => Ok(Command {
                     command_type: CommandType::Clear,
                 }),
-                "/help" => Ok(Command {
+                "/" | "/help" => Ok(Command {
                     command_type: CommandType::Help,
-                    
+
                 }),
                 "/quit" | "/exit" => Ok(Command {
                     command_type: CommandType::Quit,
