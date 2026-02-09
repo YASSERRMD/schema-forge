@@ -155,17 +155,22 @@ fn ui(f: &mut Frame, commands: &[CommandItem], state: &mut ListState) {
         .direction(Direction::Vertical)
         .margin(1)
         .constraints([
-            Constraint::Length(3),  // Fixed header height
+            Constraint::Length(9),  // Fixed header height for ASCII art
             Constraint::Min(5),     // Scrollable command list
             Constraint::Length(3),  // Fixed help text
         ])
         .split(size);
 
-    // Header block (fixed, doesn't scroll)
+    // Header block (fixed, doesn't scroll) - with ASCII art
     let header = Paragraph::new(vec![
-        Line::from(" ⚡ Schema-Forge ").style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Line::from(""),
+        Line::from("████████╗███████╗██████╗ ██████╗ ██████╗ ███████╗    █████╗ ██╗   ██╗████████╗"),
+        Line::from("╚══██╔══╝██╔════╝██╔══██╗██╔═══██╗██╔══██╗██╔════╝   ██╔══██╗██║   ██║╚══██╔══╝"),
+        Line::from("   ██║   █████╗  ██████╔╝██║   ██║██████╔╝█████╗     ███████║██║   ██║   ██║   "),
+        Line::from("   ██║   ██╔══╝  ██╔══██╗██║   ██║██╔══██╗██╔══╝     ██╔══██║██║   ██║   ██║   "),
+        Line::from("   ██║   ███████╗██║  ██║╚██████╔╝██║  ██║███████╗   ██║  ██║╚██████╔╝   ██║   "),
+        Line::from("   ╚═╝   ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝  ╚═╝ ╚═════╝    ╚═╝   "),
     ])
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
         .block(
             Block::default()
                 .borders(Borders::ALL)
