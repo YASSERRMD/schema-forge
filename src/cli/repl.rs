@@ -146,6 +146,14 @@ impl Repl {
         println!("  /help              Show detailed help");
         println!("  /quit, /exit       Exit Schema-Forge");
         println!();
+        println!("Direct SQL (type directly):");
+        println!("  SELECT * FROM users WHERE active = true");
+        println!("  INSERT, UPDATE, DELETE, CREATE, DROP, etc.");
+        println!();
+        println!("Natural Language:");
+        println!("  Show me all users in the customers table");
+        println!("  What are the top 10 products by revenue?");
+        println!();
         println!("Type /help <command> for more information on a specific command.");
         println!();
     }

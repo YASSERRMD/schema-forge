@@ -6,6 +6,8 @@
 use crate::database::connection::{DatabaseBackend, DatabasePool};
 use crate::database::schema::SchemaIndex;
 use crate::error::{Result, SchemaForgeError};
+use comfy_table::Table;
+use sqlx::Column;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -163,7 +165,7 @@ impl DatabaseManager {
         self.pool.test_connection().await.is_ok()
     }
 
-    /// Execute a SQL query on the database
+    /// Execute a SQL query on the database and return formatted results
     pub async fn execute_query(&self, sql: &str) -> Result<Vec<String>> {
         match &self.pool {
             DatabasePool::Sqlite(pool) => {
@@ -182,6 +184,123 @@ impl DatabaseManager {
                 Ok(vec![format!("Query executed successfully, {} rows returned", rows.len())])
             }
         }
+    }
+
+    /// Execute a SQL query and return actual results as a formatted table
+    pub async fn execute_query_with_results(&self, sql: &str) -> Result<String> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                self.execute_sqlite_with_results(pool, sql).await
+            }
+            DatabasePool::Postgres(pool) => {
+                self.execute_postgres_with_results(pool, sql).await
+            }
+            DatabasePool::MySql(pool) => {
+                self.execute_mysql_with_results(pool, sql).await
+            }
+        }
+    }
+
+    /// Execute SQLite query and format results as table
+    async fn execute_sqlite_with_results(&self, pool: &sqlx::SqlitePool, sql: &str) -> Result<String> {
+        use sqlx::Row;
+
+        let rows = sqlx::query(sql).fetch_all(pool).await
+            .map_err(|e| SchemaForgeError::db_query(sql, e))?;
+
+        if rows.is_empty() {
+            return Ok("No results found.".to_string());
+        }
+
+        // Get column names from first row
+        let mut table = Table::new();
+        if let Some(first_row) = rows.first() {
+            let columns: Vec<String> = first_row.columns()
+                .iter()
+                .map(|c| c.name().to_string())
+                .collect();
+            table.set_header(&columns);
+        }
+
+        // Add rows
+        for row in &rows {
+            let mut row_values = Vec::new();
+            for i in 0..row.columns().len() {
+                let value: Option<String> = row.try_get(i).ok();
+                row_values.push(value.unwrap_or_else(|| "NULL".to_string()));
+            }
+            table.add_row(row_values);
+        }
+
+        Ok(format!("{}", table))
+    }
+
+    /// Execute PostgreSQL query and format results as table
+    async fn execute_postgres_with_results(&self, pool: &sqlx::PgPool, sql: &str) -> Result<String> {
+        use sqlx::Row;
+
+        let rows = sqlx::query(sql).fetch_all(pool).await
+            .map_err(|e| SchemaForgeError::db_query(sql, e))?;
+
+        if rows.is_empty() {
+            return Ok("No results found.".to_string());
+        }
+
+        // Get column names from first row
+        let mut table = Table::new();
+        if let Some(first_row) = rows.first() {
+            let columns: Vec<String> = first_row.columns()
+                .iter()
+                .map(|c| c.name().to_string())
+                .collect();
+            table.set_header(&columns);
+        }
+
+        // Add rows
+        for row in &rows {
+            let mut row_values = Vec::new();
+            for i in 0..row.columns().len() {
+                let value: Option<String> = row.try_get(i).ok();
+                row_values.push(value.unwrap_or_else(|| "NULL".to_string()));
+            }
+            table.add_row(row_values);
+        }
+
+        Ok(format!("{}", table))
+    }
+
+    /// Execute MySQL query and format results as table
+    async fn execute_mysql_with_results(&self, pool: &sqlx::MySqlPool, sql: &str) -> Result<String> {
+        use sqlx::Row;
+
+        let rows = sqlx::query(sql).fetch_all(pool).await
+            .map_err(|e| SchemaForgeError::db_query(sql, e))?;
+
+        if rows.is_empty() {
+            return Ok("No results found.".to_string());
+        }
+
+        // Get column names from first row
+        let mut table = Table::new();
+        if let Some(first_row) = rows.first() {
+            let columns: Vec<String> = first_row.columns()
+                .iter()
+                .map(|c| c.name().to_string())
+                .collect();
+            table.set_header(&columns);
+        }
+
+        // Add rows
+        for row in &rows {
+            let mut row_values = Vec::new();
+            for i in 0..row.columns().len() {
+                let value: Option<String> = row.try_get(i).ok();
+                row_values.push(value.unwrap_or_else(|| "NULL".to_string()));
+            }
+            table.add_row(row_values);
+        }
+
+        Ok(format!("{}", table))
     }
 
     // Private indexing methods for each database type
