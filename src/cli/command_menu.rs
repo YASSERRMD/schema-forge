@@ -6,6 +6,7 @@ use ratatui::{
     crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::Line,
     widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
     Frame,
 };
@@ -92,7 +93,7 @@ pub fn show_command_menu() -> io::Result<MenuResult> {
     crossterm::terminal::enable_raw_mode()?;
     crossterm::execute!(io::stdout(), EnableMouseCapture)?;
 
-    let mut stdout = io::stdout();
+    let stdout = io::stdout();
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
@@ -142,7 +143,7 @@ fn run_menu(
 }
 
 fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
-    let size = f.size();
+    let size = f.area();
 
     // Create layout: main popup in center
     let popup_width = std::cmp::min(80, size.width - 4);
@@ -198,8 +199,7 @@ fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
 
     // Help text at bottom
     let help_text = vec![
-        " ↑/k: Up  ↓/j: Down  Enter: Select  ESC/q: Cancel  /: Type command "
-            .to_string(),
+        Line::from(" ↑/k: Up  ↓/j: Down  Enter: Select  ESC/q: Cancel  /: Type command "),
     ];
 
     let help = Paragraph::new(help_text)
