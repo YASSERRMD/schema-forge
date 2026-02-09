@@ -4,7 +4,7 @@
 //! to support multiple database types (PostgreSQL, MySQL, SQLite, MSSQL).
 
 use crate::error::{Result, SchemaForgeError};
-use sqlx::{any::AnyPoolOptions, AnyPool};
+use sqlx::AnyPool;
 use std::str::FromStr;
 
 // MSSQL support via tiberius will be added in Phase 2.3
@@ -114,87 +114,126 @@ impl std::fmt::Display for DatabaseBackend {
 
 /// Database connection pool wrapper
 ///
-/// This enum abstracts over different database pool types to provide
-/// a unified interface.
+/// This uses sqlx::AnyPool which can connect to any supported database.
 #[derive(Clone)]
-pub enum DatabasePool {
-    /// Any database pool (sqlx::Any)
-    Any(AnyPool),
-    // Future: Add specific pool types if needed for type-specific operations
-    // PostgreSQL(Pool<Postgres>),
-    // MySQL(Pool<MySql>),
-    // SQLite(Pool<Sqlite>),
+pub struct DatabasePool {
+    /// Inner AnyPool
+    inner: AnyPool,
+    /// The database backend type
+    backend: DatabaseBackend,
+}
+
+impl DatabasePool {
+    /// Get the inner AnyPool
+    pub fn inner(&self) -> &AnyPool {
+        &self.inner
+    }
+
+    /// Get the database backend
+    pub fn backend(&self) -> DatabaseBackend {
+        self.backend
+    }
 }
 
 impl DatabasePool {
     /// Create a new database pool from connection URL
     pub async fn from_url(url: &str) -> Result<Self> {
         let backend = DatabaseBackend::from_url(url)?;
-
-        match backend {
-            DatabaseBackend::PostgreSQL | DatabaseBackend::MySQL | DatabaseBackend::SQLite => {
-                // Use sqlx::Any for these databases
-                let pool = AnyPool::connect(url).await.map_err(|e| {
-                    SchemaForgeError::db_connection(url.to_string(), e)
-                })?;
-                Ok(DatabasePool::Any(pool))
-            }
-            DatabaseBackend::MSSQL => {
-                // MSSQL uses tiberius directly
-                // For now, we'll use sqlx::Any with a converted URL
-                // Note: Full MSSQL support via tiberius will be added in Phase 2.3
-                let mssql_url = convert_mssql_url_for_sqlx(url)?;
-                let pool = AnyPool::connect(&mssql_url).await.map_err(|e| {
-                    SchemaForgeError::db_connection(url.to_string(), e)
-                })?;
-                Ok(DatabasePool::Any(pool))
-            }
-        }
+        let inner = Self::connect_any(url, backend).await?;
+        Ok(Self { inner, backend })
     }
 
-    /// Get the underlying AnyPool
-    pub fn as_any(&self) -> Option<&AnyPool> {
-        match self {
-            DatabasePool::Any(pool) => Some(pool),
+    /// Connect using AnyPool with proper driver detection
+    async fn connect_any(url: &str, backend: DatabaseBackend) -> Result<AnyPool> {
+        match backend {
+            DatabaseBackend::SQLite => {
+                // Ensure SQLite URL has the proper format
+                let connection_url = if url.starts_with("sqlite://") || url.starts_with("sqlite:") {
+                    url.to_string()
+                } else {
+                    format!("sqlite:{}", url)
+                };
+
+                AnyPool::connect(&connection_url).await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+            }
+            DatabaseBackend::PostgreSQL => {
+                AnyPool::connect(url).await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+            }
+            DatabaseBackend::MySQL => {
+                AnyPool::connect(url).await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+            }
+            DatabaseBackend::MSSQL => {
+                let mssql_url = convert_mssql_url_for_sqlx(url)?;
+                AnyPool::connect(&mssql_url).await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+            }
         }
     }
 
     /// Create a new database pool with custom options
     pub async fn from_url_with_options(url: &str, max_connections: u32) -> Result<Self> {
         let backend = DatabaseBackend::from_url(url)?;
+        let inner = Self::connect_any_with_options(url, backend, max_connections).await?;
+        Ok(Self { inner, backend })
+    }
 
+    /// Connect using AnyPool with custom options
+    async fn connect_any_with_options(url: &str, backend: DatabaseBackend, max_connections: u32) -> Result<AnyPool> {
         match backend {
-            DatabaseBackend::PostgreSQL | DatabaseBackend::MySQL | DatabaseBackend::SQLite => {
-                let pool = AnyPoolOptions::new()
+            DatabaseBackend::SQLite => {
+                // Ensure SQLite URL has the proper format
+                let connection_url = if url.starts_with("sqlite://") || url.starts_with("sqlite:") {
+                    url.to_string()
+                } else {
+                    format!("sqlite:{}", url)
+                };
+
+                sqlx::any::AnyPoolOptions::new()
+                    .max_connections(max_connections)
+                    .connect(&connection_url)
+                    .await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+            }
+            DatabaseBackend::PostgreSQL => {
+                sqlx::any::AnyPoolOptions::new()
                     .max_connections(max_connections)
                     .connect(url)
                     .await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
-                Ok(DatabasePool::Any(pool))
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+            }
+            DatabaseBackend::MySQL => {
+                sqlx::any::AnyPoolOptions::new()
+                    .max_connections(max_connections)
+                    .connect(url)
+                    .await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
             }
             DatabaseBackend::MSSQL => {
                 let mssql_url = convert_mssql_url_for_sqlx(url)?;
-                let pool = AnyPoolOptions::new()
+                sqlx::any::AnyPoolOptions::new()
                     .max_connections(max_connections)
                     .connect(&mssql_url)
                     .await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
-                Ok(DatabasePool::Any(pool))
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
             }
         }
     }
 
+    /// Get the underlying AnyPool
+    pub fn as_any(&self) -> &AnyPool {
+        &self.inner
+    }
+
     /// Test the connection
     pub async fn test_connection(&self) -> Result<()> {
-        match self {
-            DatabasePool::Any(pool) => {
-                sqlx::query("SELECT 1")
-                    .fetch_one(pool)
-                    .await
-                    .map_err(|e| SchemaForgeError::db_connection("test connection".to_string(), e))?;
-                Ok(())
-            }
-        }
+        sqlx::query("SELECT 1")
+            .fetch_one(&self.inner)
+            .await
+            .map_err(|e| SchemaForgeError::db_connection("test connection".to_string(), e))?;
+        Ok(())
     }
 }
 

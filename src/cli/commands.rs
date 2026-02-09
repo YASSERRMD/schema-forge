@@ -386,9 +386,7 @@ async fn execute_sql_query(
 ) -> Result<String> {
     use sqlx::Row;
 
-    let pool = db_manager.pool().as_any().ok_or_else(|| {
-        SchemaForgeError::InvalidInput("Failed to get database pool".to_string())
-    })?;
+    let pool = db_manager.pool_any();
 
     // Execute the query
     let rows = sqlx::query(sql).fetch_all(pool).await?;

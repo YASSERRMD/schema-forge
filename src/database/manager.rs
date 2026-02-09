@@ -5,7 +5,8 @@
 
 use crate::database::connection::{DatabaseBackend, DatabasePool};
 use crate::database::schema::SchemaIndex;
-use crate::error::{Result, SchemaForgeError};
+use crate::error::Result;
+use sqlx::AnyPool;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -158,6 +159,11 @@ impl DatabaseManager {
         &self.pool
     }
 
+    /// Get the underlying AnyPool
+    pub fn pool_any(&self) -> &AnyPool {
+        self.pool.as_any()
+    }
+
     /// Get the connection URL
     pub fn connection_url(&self) -> &str {
         &self.connection_url
@@ -172,33 +178,25 @@ impl DatabaseManager {
 
     /// Index PostgreSQL database schema
     async fn index_postgresql(&self) -> Result<SchemaIndex> {
-        let pool = self.pool.as_any().ok_or_else(|| {
-            SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
-        })?;
+        let pool = self.pool_any();
         crate::database::indexer::index_postgresql(pool).await
     }
 
     /// Index MySQL database schema
     async fn index_mysql(&self) -> Result<SchemaIndex> {
-        let pool = self.pool.as_any().ok_or_else(|| {
-            SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
-        })?;
+        let pool = self.pool_any();
         crate::database::indexer::index_mysql(pool).await
     }
 
     /// Index SQLite database schema
     async fn index_sqlite(&self) -> Result<SchemaIndex> {
-        let pool = self.pool.as_any().ok_or_else(|| {
-            SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
-        })?;
+        let pool = self.pool_any();
         crate::database::indexer::index_sqlite(pool).await
     }
 
     /// Index MSSQL database schema
     async fn index_mssql(&self) -> Result<SchemaIndex> {
-        let pool = self.pool.as_any().ok_or_else(|| {
-            SchemaForgeError::ConnectionPool("Failed to get database pool".to_string())
-        })?;
+        let pool = self.pool_any();
         crate::database::indexer::index_mssql(pool).await
     }
 }
