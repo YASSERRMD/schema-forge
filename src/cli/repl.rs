@@ -65,10 +65,6 @@ impl Repl {
 
                     let line = line.trim();
 
-                    // Debug: Print trimmed input
-                    eprintln!("DEBUG: Trimmed input bytes: {:?}", line.as_bytes());
-                    eprintln!("DEBUG: Trimmed input repr: {:?}", line);
-
                     if line.is_empty() {
                         continue;
                     }
@@ -145,6 +141,14 @@ impl Repl {
         println!("  /clear             Clear chat context");
         println!("  /help              Show detailed help");
         println!("  /quit, /exit       Exit Schema-Forge");
+        println!();
+        println!("Direct SQL (type directly):");
+        println!("  SELECT * FROM users WHERE active = true");
+        println!("  INSERT, UPDATE, DELETE, CREATE, DROP, etc.");
+        println!();
+        println!("Natural Language:");
+        println!("  Show me all users in the customers table");
+        println!("  What are the top 10 products by revenue?");
         println!();
         println!("Type /help <command> for more information on a specific command.");
         println!();
