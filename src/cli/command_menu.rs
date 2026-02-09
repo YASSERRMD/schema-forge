@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
 };
 use std::io;
@@ -87,7 +87,8 @@ pub enum MenuResult {
 /// Display the command menu and return selected command
 pub fn show_command_menu() -> io::Result<MenuResult> {
     let commands = get_commands();
-    let mut selected = 0;
+    let mut state = ListState::default();
+    state.select(Some(0));
 
     // Setup terminal
     crossterm::terminal::enable_raw_mode()?;
@@ -97,7 +98,7 @@ pub fn show_command_menu() -> io::Result<MenuResult> {
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     let mut terminal = ratatui::Terminal::new(backend)?;
 
-    let result = run_menu(&mut terminal, &commands, &mut selected);
+    let result = run_menu(&mut terminal, &commands, &mut state);
 
     // Restore terminal
     crossterm::terminal::disable_raw_mode()?;
@@ -109,10 +110,10 @@ pub fn show_command_menu() -> io::Result<MenuResult> {
 fn run_menu(
     terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
     commands: &[CommandItem],
-    selected: &mut usize,
+    state: &mut ListState,
 ) -> io::Result<MenuResult> {
     loop {
-        terminal.draw(|f| ui(f, commands, selected))?;
+        terminal.draw(|f| ui(f, commands, state))?;
 
         if let Event::Key(key) = event::read()? {
             match key.code {
@@ -120,16 +121,20 @@ fn run_menu(
                     return Ok(MenuResult::Cancelled);
                 }
                 KeyCode::Enter => {
-                    return Ok(MenuResult::Command(commands[*selected].name.clone()));
+                    if let Some(selected) = state.selected() {
+                        return Ok(MenuResult::Command(commands[selected].name.clone()));
+                    }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if *selected < commands.len() - 1 {
-                        *selected += 1;
+                    let selected = state.selected().unwrap_or(0);
+                    if selected < commands.len() - 1 {
+                        state.select(Some(selected + 1));
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    if *selected > 0 {
-                        *selected -= 1;
+                    let selected = state.selected().unwrap_or(0);
+                    if selected > 0 {
+                        state.select(Some(selected - 1));
                     }
                 }
                 KeyCode::Char('/') => {
@@ -142,7 +147,7 @@ fn run_menu(
     }
 }
 
-fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
+fn ui(f: &mut Frame, commands: &[CommandItem], state: &mut ListState) {
     let size = f.area();
 
     // Create layout: main popup in center with header and scrollable list
@@ -173,22 +178,11 @@ fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
     // Command list (scrollable)
     let items: Vec<ListItem> = commands
         .iter()
-        .enumerate()
-        .map(|(i, cmd)| {
-            let style = if i == *selected {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-                    .fg(Color::White)
-            };
-
+        .map(|cmd| {
             ListItem::new(format!(
                 "  {} {:40} - {}",
                 cmd.name, "", cmd.description
             ))
-            .style(style)
         })
         .collect();
 
@@ -205,7 +199,7 @@ fn ui(f: &mut Frame, commands: &[CommandItem], selected: &usize) {
                 .bg(Color::Cyan)
         );
 
-    f.render_widget(list, chunks[1]);
+    f.render_stateful_widget(list, chunks[1], state);
 
     // Help text at bottom (fixed, doesn't scroll)
     let help_text = vec![
