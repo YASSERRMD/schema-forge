@@ -16,6 +16,8 @@ pub enum CommandType {
     Config { provider: String, key: String },
     /// List all available LLM providers
     Providers,
+    /// Switch to a different provider
+    Use { provider: String },
     /// Set model for a provider
     Model { provider: String, model: String },
     /// Clear chat context
@@ -89,6 +91,18 @@ impl Command {
                     let model = parts[2].to_string();
                     Ok(Command {
                         command_type: CommandType::Model { provider, model },
+                    })
+                }
+                "/use" => {
+                    if parts.len() < 2 {
+                        return Err(SchemaForgeError::InvalidCommandSyntax {
+                            command: cmd.to_string(),
+                            expected: "/use <provider>".to_string(),
+                        });
+                    }
+                    let provider = parts[1].to_string();
+                    Ok(Command {
+                        command_type: CommandType::Use { provider },
                     })
                 }
                 "/clear" => Ok(Command {
@@ -183,49 +197,72 @@ pub async fn handle_command(
             ))
         }
         CommandType::Providers => {
-            let providers = r#"
+            let state_guard = state.read().await;
+            let configured = state_guard.list_providers();
+
+            if configured.is_empty() {
+                let providers = r#"
 Available LLM Providers:
 
 Anthropic:
-  Models: claude-3-5-sonnet-20241022, claude-3-opus
+  Default Model: claude-sonnet-4-20250514
   Config: /config anthropic <api-key>
 
 OpenAI:
-  Models: gpt-4o-mini, gpt-4, gpt-3.5-turbo
+  Default Model: gpt-4o
   Config: /config openai <api-key>
 
 Groq:
-  Models: llama3-70b-8192, mixtral-8x7b-32768
+  Default Model: llama-3.3-70b-versatile
   Config: /config groq <api-key>
 
 Cohere:
-  Models: command-r-plus, command-r
+  Default Model: command-r-plus
   Config: /config cohere <api-key>
 
 xAI:
-  Models: grok-beta, grok-2
+  Default Model: grok-2
   Config: /config xai <api-key>
 
 Minimax:
-  Models: abab6.5s-chat, abab5.5-chat
+  Default Model: abab6.5s-chat
   Config: /config minimax <api-key>
 
 Qwen:
-  Models: qwen-turbo, qwen-max
+  Default Model: qwen-max
   Config: /config qwen <api-key>
 
 z.ai:
-  Models: z-pro-v1, z-ultra-v2
+  Default Model: deepseek-r1
   Config: /config z.ai <api-key>
 
 Set a specific model:
   /model <provider> <model-name>
 "#;
-            Ok(providers.to_string())
+                Ok(providers.to_string())
+            } else {
+                let mut output = String::from("Configured Providers:\n\n");
+
+                for provider in &configured {
+                    let model = state_guard.get_model(provider)
+                        .unwrap_or_else(|| "default".to_string());
+                    let current = state_guard.get_current_provider()
+                        .map(|p| if p == provider { " (current)" } else { "" })
+                        .unwrap_or("");
+
+                    output.push_str(&format!("  {}{}:\n", provider, current));
+                    output.push_str(&format!("    Model: {}\n", model));
+                    output.push_str(&format!("    API Key: {}***\n\n",
+                        &state_guard.get_api_key(provider).map(|k| &k[..4.min(k.len())]).unwrap_or("")));
+                }
+
+                output.push_str("\nUse /model <provider> <model> to change models\n");
+                Ok(output)
+            }
         }
         CommandType::Model { provider, model } => {
             // Store the model preference in state
-            let state_guard = state.write().await;
+            let mut state_guard = state.write().await;
 
             // Validate provider exists
             if !state_guard.api_keys.contains_key(provider) {
@@ -235,9 +272,27 @@ Set a specific model:
                 )));
             }
 
-            // Store model preference (we'll need to add this to AppState)
-            // For now, just acknowledge
-            Ok(format!("Model '{}' set for provider '{}'", model, provider))
+            // Store model preference
+            state_guard.set_model(provider.clone(), model.clone());
+
+            Ok(format!("Model '{}' set for provider '{}' (saved)", model, provider))
+        }
+        CommandType::Use { provider } => {
+            // Switch to a different provider
+            let mut state_guard = state.write().await;
+
+            // Validate provider exists
+            if !state_guard.api_keys.contains_key(provider) {
+                return Err(SchemaForgeError::InvalidInput(format!(
+                    "Provider '{}' not configured. Use /config {} <api-key> first.",
+                    provider, provider
+                )));
+            }
+
+            // Switch to this provider
+            state_guard.set_current_provider(provider.clone());
+
+            Ok(format!("Switched to provider: {} (saved)", provider))
         }
         CommandType::Clear => {
             // Clear chat context (to be implemented with message history)
@@ -254,6 +309,7 @@ Database Commands:
 Configuration:
   /config <provider> <key>  Set API key for LLM provider
   /providers         List all available LLM providers
+  /use <provider>    Switch to a different LLM provider
   /model <provider> <model>  Set model for a provider
 
 Session:
@@ -297,11 +353,14 @@ Examples:
             // Get schema context
             let schema_context = db_manager.get_context_for_llm().await;
 
+            // Get configured model for this provider
+            let model = state_guard.get_model(&current_provider);
+
             // Drop the read guard before we make the async LLM call
             drop(state_guard);
 
-            // Create the appropriate LLM provider
-            let provider = create_llm_provider(&current_provider, &api_key)?;
+            // Create the appropriate LLM provider with configured model
+            let provider = create_llm_provider(&current_provider, &api_key, model)?;
 
             // Generate SQL from natural language
             let sql_query = provider.generate_sql(&schema_context, text).await.map_err(|e| {
@@ -327,55 +386,55 @@ pub fn format_error(error: &SchemaForgeError) -> String {
     format!("Error: {}", error)
 }
 
-/// Create an LLM provider instance based on provider name
-fn create_llm_provider(provider: &str, api_key: &str) -> Result<Box<dyn crate::llm::provider::LLMProvider>> {
+/// Create an LLM provider instance based on provider name and model
+fn create_llm_provider(provider: &str, api_key: &str, model: Option<String>) -> Result<Box<dyn crate::llm::provider::LLMProvider>> {
     match provider.to_lowercase().as_str() {
         "anthropic" => {
             Ok(Box::new(crate::llm::providers::anthropic::AnthropicProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         "openai" => {
             Ok(Box::new(crate::llm::providers::openai::OpenAIProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         "groq" => {
             Ok(Box::new(crate::llm::providers::groq::GroqProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         "cohere" => {
             Ok(Box::new(crate::llm::providers::cohere::CohereProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         "xai" => {
             Ok(Box::new(crate::llm::providers::xai::XAIProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         "minimax" => {
             Ok(Box::new(crate::llm::providers::minimax::MinimaxProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         "qwen" => {
             Ok(Box::new(crate::llm::providers::qwen::QwenProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         "z.ai" | "zai" => {
             Ok(Box::new(crate::llm::providers::zai::ZAIProvider::new(
                 api_key,
-                None,
+                model,
             )))
         }
         _ => Err(SchemaForgeError::InvalidInput(format!(
