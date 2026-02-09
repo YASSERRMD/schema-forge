@@ -26,6 +26,8 @@ pub enum CommandType {
     Help,
     /// Exit the application
     Quit,
+    /// Direct SQL query execution
+    DirectSql { sql: String },
     /// Natural language query
     Query { text: String },
 }
@@ -119,13 +121,27 @@ impl Command {
                 _ => Err(SchemaForgeError::UnknownCommand(cmd.to_string())),
             }
         } else {
-            // It's a natural language query
-            Ok(Command {
-                command_type: CommandType::Query {
-                    text: input.to_string(),
-                },
-                
-            })
+            // Check if it's a direct SQL query
+            let upper_input = input.to_uppercase();
+            let sql_keywords = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "WITH"];
+
+            let is_sql_query = sql_keywords.iter().any(|keyword| upper_input.starts_with(keyword));
+
+            if is_sql_query {
+                // Direct SQL execution
+                Ok(Command {
+                    command_type: CommandType::DirectSql {
+                        sql: input.to_string(),
+                    },
+                })
+            } else {
+                // Natural language query
+                Ok(Command {
+                    command_type: CommandType::Query {
+                        text: input.to_string(),
+                    },
+                })
+            }
         }
     }
 }
@@ -317,8 +333,14 @@ Session:
   /help              Show this help message
   /quit, /exit       Exit Schema-Forge
 
+Direct SQL:
+  SELECT * FROM users WHERE active = true
+  INSERT INTO users (name) VALUES ('John')
+  Any SQL statement starting with SELECT, INSERT, UPDATE, DELETE, etc.
+
 Natural Language:
   Any text without a / prefix will be treated as a natural language query.
+  Show me all users in the customers table
 
 Examples:
   /connect postgresql://localhost/mydb
@@ -326,12 +348,25 @@ Examples:
   /config anthropic sk-ant-...
   /providers
   /model openai gpt-4
-  Show me all users in the customers table
+  SELECT * FROM users LIMIT 10
 "#;
             Ok(help.to_string())
         }
         CommandType::Quit => {
             Ok("Goodbye!".to_string())
+        }
+        CommandType::DirectSql { sql } => {
+            // Direct SQL execution - no LLM needed
+            let state_guard = state.read().await;
+
+            // Check if database is connected
+            let db_manager = state_guard.database_manager.as_ref()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("Not connected to any database. Use /connect first.".to_string()))?;
+
+            // Execute the SQL query directly and return formatted results
+            let results = db_manager.execute_query_with_results(sql).await?;
+
+            Ok(results)
         }
         CommandType::Query { text } => {
             // This is a natural language query - process it using LLM
@@ -449,15 +484,8 @@ async fn execute_sql_query(
     db_manager: &crate::database::manager::DatabaseManager,
     sql: &str,
 ) -> Result<String> {
-    // Execute the query using the manager's pool
-    let results = db_manager.execute_query(sql).await?;
-
-    if results.is_empty() {
-        return Ok("No results found.".to_string());
-    }
-
-    // Format results - just join the strings
-    Ok(results.join("\n"))
+    // Execute the query and return formatted results as a table
+    db_manager.execute_query_with_results(sql).await
 }
 
 #[cfg(test)]
