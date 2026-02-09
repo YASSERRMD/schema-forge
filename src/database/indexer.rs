@@ -6,10 +6,10 @@
 
 use crate::database::schema::{Column, ColumnType, ForeignKeyReference, SchemaIndex, Table, TableRelationship};
 use crate::error::{Result, SchemaForgeError};
-use sqlx::{AnyPool, Row};
+use sqlx::{postgres::PgPool, mysql::MySqlPool, sqlite::SqlitePool, Row};
 
 /// Index PostgreSQL database schema
-pub async fn index_postgresql(pool: &AnyPool) -> Result<SchemaIndex> {
+pub async fn index_postgresql(pool: &PgPool) -> Result<SchemaIndex> {
     let mut schema_index = SchemaIndex::new();
 
     // Get database name
@@ -191,7 +191,7 @@ pub async fn index_postgresql(pool: &AnyPool) -> Result<SchemaIndex> {
 }
 
 /// Index MySQL database schema
-pub async fn index_mysql(pool: &AnyPool) -> Result<SchemaIndex> {
+pub async fn index_mysql(pool: &MySqlPool) -> Result<SchemaIndex> {
     let mut schema_index = SchemaIndex::new();
 
     // Get database name
@@ -347,7 +347,7 @@ pub async fn index_mysql(pool: &AnyPool) -> Result<SchemaIndex> {
 }
 
 /// Index SQLite database schema
-pub async fn index_sqlite(pool: &AnyPool) -> Result<SchemaIndex> {
+pub async fn index_sqlite(pool: &SqlitePool) -> Result<SchemaIndex> {
     let mut schema_index = SchemaIndex::new();
     schema_index.database_name = Some("main".to_string());
     schema_index.schema_name = Some("main".to_string());
@@ -457,14 +457,14 @@ pub async fn index_sqlite(pool: &AnyPool) -> Result<SchemaIndex> {
 }
 
 /// Index MSSQL database schema
-pub async fn index_mssql(pool: &AnyPool) -> Result<SchemaIndex> {
+pub async fn index_mssql(_pool: &sqlx::AnyPool) -> Result<SchemaIndex> {
     // TODO: Full MSSQL support requires tiberius client
     // For now, return basic schema
     let mut schema_index = SchemaIndex::new();
 
     // Try to get database name
     let db_row: Option<(String,)> = sqlx::query_as("SELECT DB_NAME()")
-        .fetch_optional(pool)
+        .fetch_optional(_pool)
         .await?;
     if let Some((db_name,)) = db_row {
         schema_index.database_name = Some(db_name);

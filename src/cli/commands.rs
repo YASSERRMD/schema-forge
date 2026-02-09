@@ -124,15 +124,21 @@ pub async fn handle_command(
     match &command.command_type {
         CommandType::Connect { url } => {
             // Validate the connection URL format
-            if !url.starts_with("postgresql://")
-                && !url.starts_with("postgres://")
-                && !url.starts_with("mysql://")
-                && !url.starts_with("sqlite://")
-                && !url.starts_with("mssql://")
-                && !url.starts_with("sqlserver://")
+            let url_lower = url.to_lowercase();
+            if !url_lower.starts_with("postgresql://")
+                && !url_lower.starts_with("postgres://")
+                && !url_lower.starts_with("mysql://")
+                && !url_lower.starts_with("mariadb://")
+                && !url_lower.starts_with("sqlite://")
+                && !url_lower.starts_with("sqlite:")
+                && !url_lower.starts_with("mssql://")
+                && !url_lower.starts_with("sqlserver://")
+                && !url_lower.ends_with(".db")
+                && !url_lower.ends_with(".sqlite")
+                && !url_lower.ends_with(".sqlite3")
             {
                 return Err(SchemaForgeError::InvalidInput(format!(
-                    "Invalid database URL: {}. Supported: postgresql://, mysql://, sqlite://, mssql://",
+                    "Invalid database URL: {}. Supported: postgresql://, mysql://, sqlite://, sqlite:, mssql://",
                     url
                 )));
             }
@@ -384,54 +390,15 @@ async fn execute_sql_query(
     db_manager: &crate::database::manager::DatabaseManager,
     sql: &str,
 ) -> Result<String> {
-    use sqlx::Row;
+    // Execute the query using the manager's pool
+    let results = db_manager.execute_query(sql).await?;
 
-    let pool = db_manager.pool_any();
-
-    // Execute the query
-    let rows = sqlx::query(sql).fetch_all(pool).await?;
-
-    if rows.is_empty() {
+    if results.is_empty() {
         return Ok("No results found.".to_string());
     }
 
-    // Format results
-    let mut output = String::new();
-    for (i, row) in rows.iter().enumerate() {
-        if i > 0 && i < 10 {
-            // Limit to 10 rows for display
-            output.push_str("\n");
-        }
-        if i >= 10 {
-            output.push_str(&format!("\n... and {} more rows", rows.len() - 10));
-            break;
-        }
-
-        // Get column values
-        let columns = row.columns();
-        let values: Vec<String> = columns
-            .iter()
-            .enumerate()
-            .map(|(j, _col)| {
-                // Try to get the value as different types
-                if let Ok(val) = row.try_get::<String, _>(j) {
-                    val
-                } else if let Ok(val) = row.try_get::<i64, _>(j) {
-                    val.to_string()
-                } else if let Ok(val) = row.try_get::<f64, _>(j) {
-                    val.to_string()
-                } else if let Ok(val) = row.try_get::<bool, _>(j) {
-                    val.to_string()
-                } else {
-                    "NULL".to_string()
-                }
-            })
-            .collect();
-
-        output.push_str(&format!("Row {}: {}", i + 1, values.join(" | ")));
-    }
-
-    Ok(output)
+    // Format results - just join the strings
+    Ok(results.join("\n"))
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
 //! to support multiple database types (PostgreSQL, MySQL, SQLite, MSSQL).
 
 use crate::error::{Result, SchemaForgeError};
-use sqlx::AnyPool;
+use sqlx::{sqlite::SqlitePool, postgres::PgPool, mysql::MySqlPool};
 use std::str::FromStr;
 
 // MSSQL support via tiberius will be added in Phase 2.3
@@ -34,7 +34,7 @@ impl DatabaseBackend {
             Ok(DatabaseBackend::PostgreSQL)
         } else if url_lower.starts_with("mysql://") || url_lower.starts_with("mariadb://") {
             Ok(DatabaseBackend::MySQL)
-        } else if url_lower.starts_with("sqlite://") || url_lower.ends_with(".db") || url_lower.ends_with(".sqlite") || url_lower.ends_with(".sqlite3") {
+        } else if url_lower.starts_with("sqlite://") || url_lower.starts_with("sqlite:") || url_lower.ends_with(".db") || url_lower.ends_with(".sqlite") || url_lower.ends_with(".sqlite3") {
             Ok(DatabaseBackend::SQLite)
         } else if url_lower.starts_with("mssql://") || url_lower.starts_with("sqlserver://") {
             Ok(DatabaseBackend::MSSQL)
@@ -114,61 +114,62 @@ impl std::fmt::Display for DatabaseBackend {
 
 /// Database connection pool wrapper
 ///
-/// This uses sqlx::AnyPool which can connect to any supported database.
+/// This enum holds the actual database pool for the connected backend.
 #[derive(Clone)]
-pub struct DatabasePool {
-    /// Inner AnyPool
-    inner: AnyPool,
-    /// The database backend type
-    backend: DatabaseBackend,
+pub enum DatabasePool {
+    /// SQLite pool
+    Sqlite(SqlitePool),
+    /// PostgreSQL pool
+    Postgres(PgPool),
+    /// MySQL pool
+    MySql(MySqlPool),
 }
 
 impl DatabasePool {
-    /// Get the inner AnyPool
-    pub fn inner(&self) -> &AnyPool {
-        &self.inner
-    }
-
-    /// Get the database backend
+    /// Get the database backend for this pool
     pub fn backend(&self) -> DatabaseBackend {
-        self.backend
+        match self {
+            DatabasePool::Sqlite(_) => DatabaseBackend::SQLite,
+            DatabasePool::Postgres(_) => DatabaseBackend::PostgreSQL,
+            DatabasePool::MySql(_) => DatabaseBackend::MySQL,
+        }
     }
-}
 
-impl DatabasePool {
+    /// Create a new database pool from connection URL
     /// Create a new database pool from connection URL
     pub async fn from_url(url: &str) -> Result<Self> {
         let backend = DatabaseBackend::from_url(url)?;
-        let inner = Self::connect_any(url, backend).await?;
-        Ok(Self { inner, backend })
-    }
 
-    /// Connect using AnyPool with proper driver detection
-    async fn connect_any(url: &str, backend: DatabaseBackend) -> Result<AnyPool> {
         match backend {
             DatabaseBackend::SQLite => {
-                // Ensure SQLite URL has the proper format
-                let connection_url = if url.starts_with("sqlite://") || url.starts_with("sqlite:") {
-                    url.to_string()
+                // Strip the sqlite: or sqlite:// prefix
+                let db_path = if let Some(stripped) = url.strip_prefix("sqlite://") {
+                    stripped
+                } else if let Some(stripped) = url.strip_prefix("sqlite:") {
+                    stripped
                 } else {
-                    format!("sqlite:{}", url)
+                    url
                 };
 
-                AnyPool::connect(&connection_url).await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                let pool = SqlitePool::connect(db_path).await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
+                Ok(DatabasePool::Sqlite(pool))
             }
             DatabaseBackend::PostgreSQL => {
-                AnyPool::connect(url).await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                let pool = PgPool::connect(url).await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
+                Ok(DatabasePool::Postgres(pool))
             }
             DatabaseBackend::MySQL => {
-                AnyPool::connect(url).await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                let pool = MySqlPool::connect(url).await
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
+                Ok(DatabasePool::MySql(pool))
             }
             DatabaseBackend::MSSQL => {
-                let mssql_url = convert_mssql_url_for_sqlx(url)?;
-                AnyPool::connect(&mssql_url).await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                // MSSQL support requires tiberius client - not yet implemented
+                Err(SchemaForgeError::UnsupportedDatabaseType(
+                    "MSSQL support not yet fully implemented".to_string()
+                ))
             }
         }
     }
@@ -176,76 +177,74 @@ impl DatabasePool {
     /// Create a new database pool with custom options
     pub async fn from_url_with_options(url: &str, max_connections: u32) -> Result<Self> {
         let backend = DatabaseBackend::from_url(url)?;
-        let inner = Self::connect_any_with_options(url, backend, max_connections).await?;
-        Ok(Self { inner, backend })
-    }
 
-    /// Connect using AnyPool with custom options
-    async fn connect_any_with_options(url: &str, backend: DatabaseBackend, max_connections: u32) -> Result<AnyPool> {
         match backend {
             DatabaseBackend::SQLite => {
-                // Ensure SQLite URL has the proper format
-                let connection_url = if url.starts_with("sqlite://") || url.starts_with("sqlite:") {
-                    url.to_string()
+                let db_path = if let Some(stripped) = url.strip_prefix("sqlite://") {
+                    stripped
+                } else if let Some(stripped) = url.strip_prefix("sqlite:") {
+                    stripped
                 } else {
-                    format!("sqlite:{}", url)
+                    url
                 };
 
-                sqlx::any::AnyPoolOptions::new()
+                let pool = sqlx::sqlite::SqlitePoolOptions::new()
                     .max_connections(max_connections)
-                    .connect(&connection_url)
+                    .connect(db_path)
                     .await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
+                Ok(DatabasePool::Sqlite(pool))
             }
             DatabaseBackend::PostgreSQL => {
-                sqlx::any::AnyPoolOptions::new()
+                let pool = sqlx::postgres::PgPoolOptions::new()
                     .max_connections(max_connections)
                     .connect(url)
                     .await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
+                Ok(DatabasePool::Postgres(pool))
             }
             DatabaseBackend::MySQL => {
-                sqlx::any::AnyPoolOptions::new()
+                let pool = sqlx::mysql::MySqlPoolOptions::new()
                     .max_connections(max_connections)
                     .connect(url)
                     .await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
+                Ok(DatabasePool::MySql(pool))
             }
             DatabaseBackend::MSSQL => {
-                let mssql_url = convert_mssql_url_for_sqlx(url)?;
-                sqlx::any::AnyPoolOptions::new()
-                    .max_connections(max_connections)
-                    .connect(&mssql_url)
-                    .await
-                    .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))
+                Err(SchemaForgeError::UnsupportedDatabaseType(
+                    "MSSQL support not yet fully implemented".to_string()
+                ))
             }
         }
     }
 
-    /// Get the underlying AnyPool
-    pub fn as_any(&self) -> &AnyPool {
-        &self.inner
-    }
-
     /// Test the connection
     pub async fn test_connection(&self) -> Result<()> {
-        sqlx::query("SELECT 1")
-            .fetch_one(&self.inner)
-            .await
-            .map_err(|e| SchemaForgeError::db_connection("test connection".to_string(), e))?;
-        Ok(())
+        match self {
+            DatabasePool::Sqlite(pool) => {
+                sqlx::query("SELECT 1")
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|e| SchemaForgeError::db_connection("test connection".to_string(), e))?;
+                Ok(())
+            }
+            DatabasePool::Postgres(pool) => {
+                sqlx::query("SELECT 1")
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|e| SchemaForgeError::db_connection("test connection".to_string(), e))?;
+                Ok(())
+            }
+            DatabasePool::MySql(pool) => {
+                sqlx::query("SELECT 1")
+                    .fetch_one(pool)
+                    .await
+                    .map_err(|e| SchemaForgeError::db_connection("test connection".to_string(), e))?;
+                Ok(())
+            }
+        }
     }
-}
-
-/// Convert MSSQL URL format to sqlx-compatible format
-///
-/// tiberius uses: `mssql://user:pass@host:port/database`
-/// sqlx expects: `mssql://user:pass@host:port/database` (similar format)
-fn convert_mssql_url_for_sqlx(url: &str) -> Result<String> {
-    // For now, return as-is. If sqlx doesn't support MSSQL directly,
-    // we'll need to use tiberius's native client
-    // This will be implemented in Phase 2.3
-    Ok(url.to_string())
 }
 
 #[cfg(test)]

@@ -5,8 +5,7 @@
 
 use crate::database::connection::{DatabaseBackend, DatabasePool};
 use crate::database::schema::SchemaIndex;
-use crate::error::Result;
-use sqlx::AnyPool;
+use crate::error::{Result, SchemaForgeError};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -159,11 +158,6 @@ impl DatabaseManager {
         &self.pool
     }
 
-    /// Get the underlying AnyPool
-    pub fn pool_any(&self) -> &AnyPool {
-        self.pool.as_any()
-    }
-
     /// Get the connection URL
     pub fn connection_url(&self) -> &str {
         &self.connection_url
@@ -174,30 +168,67 @@ impl DatabaseManager {
         self.pool.test_connection().await.is_ok()
     }
 
+    /// Execute a SQL query on the database
+    pub async fn execute_query(&self, sql: &str) -> Result<Vec<String>> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let rows = sqlx::query(sql).fetch_all(pool).await
+                    .map_err(|e| SchemaForgeError::db_query(sql, e))?;
+                Ok(vec![format!("Query executed successfully, {} rows returned", rows.len())])
+            }
+            DatabasePool::Postgres(pool) => {
+                let rows = sqlx::query(sql).fetch_all(pool).await
+                    .map_err(|e| SchemaForgeError::db_query(sql, e))?;
+                Ok(vec![format!("Query executed successfully, {} rows returned", rows.len())])
+            }
+            DatabasePool::MySql(pool) => {
+                let rows = sqlx::query(sql).fetch_all(pool).await
+                    .map_err(|e| SchemaForgeError::db_query(sql, e))?;
+                Ok(vec![format!("Query executed successfully, {} rows returned", rows.len())])
+            }
+        }
+    }
+
     // Private indexing methods for each database type
 
     /// Index PostgreSQL database schema
     async fn index_postgresql(&self) -> Result<SchemaIndex> {
-        let pool = self.pool_any();
-        crate::database::indexer::index_postgresql(pool).await
+        if let DatabasePool::Postgres(pool) = &self.pool {
+            crate::database::indexer::index_postgresql(pool).await
+        } else {
+            Err(SchemaForgeError::InvalidInput(
+                "Not connected to PostgreSQL database".to_string()
+            ))
+        }
     }
 
     /// Index MySQL database schema
     async fn index_mysql(&self) -> Result<SchemaIndex> {
-        let pool = self.pool_any();
-        crate::database::indexer::index_mysql(pool).await
+        if let DatabasePool::MySql(pool) = &self.pool {
+            crate::database::indexer::index_mysql(pool).await
+        } else {
+            Err(SchemaForgeError::InvalidInput(
+                "Not connected to MySQL database".to_string()
+            ))
+        }
     }
 
     /// Index SQLite database schema
     async fn index_sqlite(&self) -> Result<SchemaIndex> {
-        let pool = self.pool_any();
-        crate::database::indexer::index_sqlite(pool).await
+        if let DatabasePool::Sqlite(pool) = &self.pool {
+            crate::database::indexer::index_sqlite(pool).await
+        } else {
+            Err(SchemaForgeError::InvalidInput(
+                "Not connected to SQLite database".to_string()
+            ))
+        }
     }
 
     /// Index MSSQL database schema
     async fn index_mssql(&self) -> Result<SchemaIndex> {
-        let pool = self.pool_any();
-        crate::database::indexer::index_mssql(pool).await
+        Err(SchemaForgeError::UnsupportedDatabaseType(
+            "MSSQL support not yet implemented".to_string()
+        ))
     }
 }
 
