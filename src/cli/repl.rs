@@ -123,6 +123,65 @@ impl Repl {
                         continue;
                     }
 
+                    // Check if user typed just "/" - show command menu
+                    if line == "/" {
+                        match crate::cli::command_menu::show_command_menu() {
+                            Ok(crate::cli::command_menu::MenuResult::Command(cmd)) => {
+                                // User selected a command from menu
+                                println!("\r{}", cmd);
+                                match Command::parse(&cmd) {
+                                    Ok(command) => {
+                                        self.handle_command(command).await;
+                                    }
+                                    Err(e) => {
+                                        println!("{}", format_error(&e));
+                                    }
+                                }
+                            }
+                            Ok(crate::cli::command_menu::MenuResult::Cancelled) => {
+                                // User cancelled, show prompt again
+                                println!();
+                                continue;
+                            }
+                            Ok(crate::cli::command_menu::MenuResult::TextInput) => {
+                                // User wants to type, read their input
+                                match self.editor.readline("> ") {
+                                    Ok(input) => {
+                                        let input = input.trim();
+                                        if !input.is_empty() {
+                                            let _ = self.editor.add_history_entry(input);
+                                            match Command::parse(input) {
+                                                Ok(command) => {
+                                                    self.handle_command(command).await;
+                                                }
+                                                Err(e) => {
+                                                    println!("{}", format_error(&e));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(ReadlineError::Interrupted) => {
+                                        println!("^C");
+                                        continue;
+                                    }
+                                    Err(ReadlineError::Eof) => {
+                                        println!();
+                                        self.running = false;
+                                    }
+                                    Err(err) => {
+                                        println!("Error: {:?}", err);
+                                        self.running = false;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                println!("Error showing menu: {}", e);
+                                continue;
+                            }
+                        }
+                        continue;
+                    }
+
                     // Add to history (ignore result as history failure is non-critical)
                     let _ = self.editor.add_history_entry(line);
 
