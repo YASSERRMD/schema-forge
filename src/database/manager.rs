@@ -121,12 +121,8 @@ impl DatabaseManager {
     ///
     /// # Returns
     /// A formatted string containing the complete database schema
-    pub fn get_context_for_llm(&self) -> String {
-        // Note: This is a synchronous method that reads from the RwLock
-        // In async context, we'd use try_read() or block on read()
-        // For now, we'll clone the Arc and use a blocking read
-        let index = self.schema_index.clone();
-        let index_guard = index.blocking_read();
+    pub async fn get_context_for_llm(&self) -> String {
+        let index_guard = self.schema_index.read().await;
         index_guard.format_for_llm()
     }
 
@@ -134,9 +130,8 @@ impl DatabaseManager {
     ///
     /// Provides a more compact view focusing on table names and
     /// their relationships, useful when token count is limited.
-    pub fn get_summary_context_for_llm(&self) -> String {
-        let index = self.schema_index.clone();
-        let index_guard = index.blocking_read();
+    pub async fn get_summary_context_for_llm(&self) -> String {
+        let index_guard = self.schema_index.read().await;
         index_guard.format_summary_for_llm()
     }
 

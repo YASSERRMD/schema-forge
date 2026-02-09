@@ -295,7 +295,7 @@ Examples:
                 .clone();
 
             // Get schema context
-            let schema_context = db_manager.get_context_for_llm();
+            let schema_context = db_manager.get_context_for_llm().await;
 
             // Drop the read guard before we make the async LLM call
             drop(state_guard);
