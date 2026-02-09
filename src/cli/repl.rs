@@ -59,7 +59,16 @@ impl Repl {
         while self.running {
             match self.editor.readline("> ") {
                 Ok(line) => {
+                    // Debug: Print raw input to diagnose issues
+                    eprintln!("DEBUG: Raw input bytes: {:?}", line.as_bytes());
+                    eprintln!("DEBUG: Raw input repr: {:?}", line);
+
                     let line = line.trim();
+
+                    // Debug: Print trimmed input
+                    eprintln!("DEBUG: Trimmed input bytes: {:?}", line.as_bytes());
+                    eprintln!("DEBUG: Trimmed input repr: {:?}", line);
+
                     if line.is_empty() {
                         continue;
                     }
@@ -69,6 +78,7 @@ impl Repl {
 
                     // Check for "/" command to show all available commands
                     if line == "/" {
+                        eprintln!("DEBUG: Detected '/' command!");
                         self.show_all_commands();
                         continue;
                     }
