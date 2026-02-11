@@ -128,6 +128,7 @@ impl Command {
             let is_show_sql = upper_input.starts_with("SHOW ")
                 && !upper_input.starts_with("SHOW ME ")
                 && !upper_input.starts_with("SHOW US ");
+
             let is_sql_query = sql_keywords
                 .iter()
                 .any(|keyword| upper_input.starts_with(keyword))

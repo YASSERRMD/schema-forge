@@ -127,9 +127,48 @@ impl Repl {
                     // Check if user typed just "/" - show command menu
                     if line == "/" {
                         match crate::cli::command_menu::show_command_menu() {
-                            Ok(crate::cli::command_menu::MenuResult::Command { initial_input }) => {
-                                // User selected a command from menu
-                                self.read_and_execute_input(Some(&initial_input)).await;
+                            Ok(crate::cli::command_menu::MenuResult::Command(cmd)) => {
+                                // User selected a command from menu.
+                                let needs_args = matches!(
+                                    cmd.as_str(),
+                                    "/connect" | "/config" | "/use" | "/model"
+                                );
+                                let initial_input =
+                                    if needs_args { format!("{} ", cmd) } else { cmd };
+
+                                match self
+                                    .editor
+                                    .readline_with_initial("> ", (&initial_input, ""))
+                                {
+                                    Ok(input) => {
+                                        let input = input.trim();
+                                        if input.is_empty() {
+                                            continue;
+                                        }
+
+                                        let _ = self.editor.add_history_entry(input);
+                                        match Command::parse(input) {
+                                            Ok(command) => {
+                                                self.handle_command(command).await;
+                                            }
+                                            Err(e) => {
+                                                println!("{}", format_error(&e));
+                                            }
+                                        }
+                                    }
+                                    Err(ReadlineError::Interrupted) => {
+                                        println!("^C");
+                                        continue;
+                                    }
+                                    Err(ReadlineError::Eof) => {
+                                        println!();
+                                        self.running = false;
+                                    }
+                                    Err(err) => {
+                                        println!("Error: {:?}", err);
+                                        self.running = false;
+                                    }
+                                }
                             }
                             Ok(crate::cli::command_menu::MenuResult::Cancelled) => {
                                 // User cancelled, show prompt again
@@ -137,8 +176,35 @@ impl Repl {
                                 continue;
                             }
                             Ok(crate::cli::command_menu::MenuResult::TextInput) => {
-                                // User wants to type a command manually.
-                                self.read_and_execute_input(Some("/")).await;
+                                // User wants to type, prefill with command prefix.
+                                match self.editor.readline_with_initial("> ", ("/", "")) {
+                                    Ok(input) => {
+                                        let input = input.trim();
+                                        if !input.is_empty() {
+                                            let _ = self.editor.add_history_entry(input);
+                                            match Command::parse(input) {
+                                                Ok(command) => {
+                                                    self.handle_command(command).await;
+                                                }
+                                                Err(e) => {
+                                                    println!("{}", format_error(&e));
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(ReadlineError::Interrupted) => {
+                                        println!("^C");
+                                        continue;
+                                    }
+                                    Err(ReadlineError::Eof) => {
+                                        println!();
+                                        self.running = false;
+                                    }
+                                    Err(err) => {
+                                        println!("Error: {:?}", err);
+                                        self.running = false;
+                                    }
+                                }
                             }
                             Err(e) => {
                                 println!("Error showing menu: {}", e);
@@ -235,43 +301,6 @@ impl Repl {
         println!();
         println!("Type /help <command> for more information on a specific command.");
         println!();
-    }
-
-    async fn read_and_execute_input(&mut self, initial_input: Option<&str>) {
-        let read_result = match initial_input {
-            Some(initial) => self.editor.readline_with_initial("> ", (initial, "")),
-            None => self.editor.readline("> "),
-        };
-
-        match read_result {
-            Ok(input) => {
-                let input = input.trim();
-                if input.is_empty() {
-                    return;
-                }
-
-                let _ = self.editor.add_history_entry(input);
-                match Command::parse(input) {
-                    Ok(command) => {
-                        self.handle_command(command).await;
-                    }
-                    Err(e) => {
-                        println!("{}", format_error(&e));
-                    }
-                }
-            }
-            Err(ReadlineError::Interrupted) => {
-                println!("^C");
-            }
-            Err(ReadlineError::Eof) => {
-                println!();
-                self.running = false;
-            }
-            Err(err) => {
-                println!("Error: {:?}", err);
-                self.running = false;
-            }
-        }
     }
 
     /// Handle a command
