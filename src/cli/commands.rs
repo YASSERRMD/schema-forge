@@ -64,6 +64,7 @@ impl Command {
                 }
                 "/index" => Ok(Command {
                     command_type: CommandType::Index,
+                    
                 }),
                 "/config" => {
                     if parts.len() < 3 {
@@ -111,28 +112,23 @@ impl Command {
                 }),
                 "/" | "/help" => Ok(Command {
                     command_type: CommandType::Help,
+
                 }),
                 "/quit" | "/exit" => Ok(Command {
                     command_type: CommandType::Quit,
+                    
                 }),
                 _ => Err(SchemaForgeError::UnknownCommand(cmd.to_string())),
             }
         } else {
             // Check if it's a direct SQL query
             let upper_input = input.to_uppercase();
-            let sql_keywords = [
-                "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE",
-                "DESCRIBE", "DESC", "EXPLAIN", "WITH",
-            ];
+            let sql_keywords = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "DESCRIBE", "DESC", "EXPLAIN", "WITH"];
 
             let is_show_sql = upper_input.starts_with("SHOW ")
                 && !upper_input.starts_with("SHOW ME ")
                 && !upper_input.starts_with("SHOW US ");
-
-            let is_sql_query = sql_keywords
-                .iter()
-                .any(|keyword| upper_input.starts_with(keyword))
-                || is_show_sql;
+            let is_sql_query = sql_keywords.iter().any(|keyword| upper_input.starts_with(keyword)) || is_show_sql;
 
             if is_sql_query {
                 // Direct SQL execution
@@ -154,7 +150,10 @@ impl Command {
 }
 
 /// Handle a command and return the result message
-pub async fn handle_command(command: &Command, state: SharedState) -> Result<String> {
+pub async fn handle_command(
+    command: &Command,
+    state: SharedState,
+) -> Result<String> {
     match &command.command_type {
         CommandType::Connect { url } => {
             // Validate the connection URL format
@@ -189,11 +188,8 @@ pub async fn handle_command(command: &Command, state: SharedState) -> Result<Str
         CommandType::Index => {
             // Check if database is connected
             let state_guard = state.read().await;
-            let db_manager = state_guard.database_manager.as_ref().ok_or_else(|| {
-                SchemaForgeError::InvalidInput(
-                    "Not connected to any database. Use /connect first.".to_string(),
-                )
-            })?;
+            let db_manager = state_guard.database_manager.as_ref()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("Not connected to any database. Use /connect first.".to_string()))?;
 
             // Actually index the database
             let schema_index = db_manager.index_database().await?;
@@ -201,10 +197,7 @@ pub async fn handle_command(command: &Command, state: SharedState) -> Result<Str
             let table_count = schema_index.tables.len();
             let column_count: usize = schema_index.tables.values().map(|t| t.columns.len()).sum();
 
-            Ok(format!(
-                "Database indexed successfully: {} tables, {} columns",
-                table_count, column_count
-            ))
+            Ok(format!("Database indexed successfully: {} tables, {} columns", table_count, column_count))
         }
         CommandType::Config { provider, key } => {
             // Store the API key in state
@@ -270,23 +263,16 @@ Set a specific model:
                 let mut output = String::from("Configured Providers:\n\n");
 
                 for provider in &configured {
-                    let model = state_guard
-                        .get_model(provider)
+                    let model = state_guard.get_model(provider)
                         .unwrap_or_else(|| "default".to_string());
-                    let current = state_guard
-                        .get_current_provider()
+                    let current = state_guard.get_current_provider()
                         .map(|p| if p == provider { " (current)" } else { "" })
                         .unwrap_or("");
 
                     output.push_str(&format!("  {}{}:\n", provider, current));
                     output.push_str(&format!("    Model: {}\n", model));
-                    output.push_str(&format!(
-                        "    API Key: {}***\n\n",
-                        &state_guard
-                            .get_api_key(provider)
-                            .map(|k| &k[..4.min(k.len())])
-                            .unwrap_or("")
-                    ));
+                    output.push_str(&format!("    API Key: {}***\n\n",
+                        &state_guard.get_api_key(provider).map(|k| &k[..4.min(k.len())]).unwrap_or("")));
                 }
 
                 output.push_str("\nUse /model <provider> <model> to change models\n");
@@ -308,10 +294,7 @@ Set a specific model:
             // Store model preference
             state_guard.set_model(provider.clone(), model.clone());
 
-            Ok(format!(
-                "Model '{}' set for provider '{}' (saved)",
-                model, provider
-            ))
+            Ok(format!("Model '{}' set for provider '{}' (saved)", model, provider))
         }
         CommandType::Use { provider } => {
             // Switch to a different provider
@@ -372,17 +355,16 @@ Examples:
 "#;
             Ok(help.to_string())
         }
-        CommandType::Quit => Ok("Goodbye!".to_string()),
+        CommandType::Quit => {
+            Ok("Goodbye!".to_string())
+        }
         CommandType::DirectSql { sql } => {
             // Direct SQL execution - no LLM needed
             let state_guard = state.read().await;
 
             // Check if database is connected
-            let db_manager = state_guard.database_manager.as_ref().ok_or_else(|| {
-                SchemaForgeError::InvalidInput(
-                    "Not connected to any database. Use /connect first.".to_string(),
-                )
-            })?;
+            let db_manager = state_guard.database_manager.as_ref()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("Not connected to any database. Use /connect first.".to_string()))?;
 
             // Execute the SQL query directly and return formatted results
             let results = db_manager.execute_query_with_results(sql).await?;
@@ -394,31 +376,16 @@ Examples:
             let state_guard = state.read().await;
 
             // Check if database is connected
-            let db_manager = state_guard.database_manager.as_ref().ok_or_else(|| {
-                SchemaForgeError::InvalidInput(
-                    "Not connected to any database. Use /connect first.".to_string(),
-                )
-            })?;
+            let db_manager = state_guard.database_manager.as_ref()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("Not connected to any database. Use /connect first.".to_string()))?;
 
             // Check if an LLM provider is configured
-            let current_provider = state_guard
-                .get_current_provider()
-                .ok_or_else(|| {
-                    SchemaForgeError::InvalidInput(
-                        "No LLM provider configured. Use /config <provider> <api-key> first."
-                            .to_string(),
-                    )
-                })?
+            let current_provider = state_guard.get_current_provider()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("No LLM provider configured. Use /config <provider> <api-key> first.".to_string()))?
                 .clone();
 
-            let api_key = state_guard
-                .get_api_key(&current_provider)
-                .ok_or_else(|| {
-                    SchemaForgeError::InvalidInput(format!(
-                        "API key not found for provider '{}'",
-                        current_provider
-                    ))
-                })?
+            let api_key = state_guard.get_api_key(&current_provider)
+                .ok_or_else(|| SchemaForgeError::InvalidInput(format!("API key not found for provider '{}'", current_provider)))?
                 .clone();
 
             // Get schema context
@@ -434,14 +401,13 @@ Examples:
             let provider = create_llm_provider(&current_provider, &api_key, model)?;
 
             // Generate SQL from natural language
-            let sql_query = provider
-                .generate_sql(&schema_context, text)
-                .await
-                .map_err(|e| SchemaForgeError::LLMApiError {
+            let sql_query = provider.generate_sql(&schema_context, text).await.map_err(|e| {
+                SchemaForgeError::LLMApiError {
                     provider: current_provider.clone(),
                     message: format!("Failed to generate SQL: {}", e),
                     status: 0,
-                })?;
+                }
+            })?;
 
             // Execute the SQL query
             let state_guard = state.read().await;
@@ -459,11 +425,7 @@ pub fn format_error(error: &SchemaForgeError) -> String {
 }
 
 /// Create an LLM provider instance based on provider name and model
-fn create_llm_provider(
-    provider: &str,
-    api_key: &str,
-    model: Option<String>,
-) -> Result<Box<dyn crate::llm::provider::LLMProvider>> {
+fn create_llm_provider(provider: &str, api_key: &str, model: Option<String>) -> Result<Box<dyn crate::llm::provider::LLMProvider>> {
     match provider.to_lowercase().as_str() {
         "anthropic" => {
             Ok(Box::new(crate::llm::providers::anthropic::AnthropicProvider::new(
