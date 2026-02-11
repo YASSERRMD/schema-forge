@@ -2,18 +2,18 @@
 //!
 //! This module implements the interactive Read-Eval-Print Loop for Schema-Forge.
 
-use crate::cli::commands::{self, Command, format_error};
+use crate::cli::commands::{self, format_error, Command};
 use crate::config::SharedState;
 use crate::error::Result;
-use rustyline::error::ReadlineError;
-use rustyline::{CompletionType, Config, Editor};
-use rustyline::history::DefaultHistory;
 use rustyline::completion::Completer;
+use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
+use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
-use rustyline::Helper;
 use rustyline::Context;
+use rustyline::Helper;
+use rustyline::{CompletionType, Config, Editor};
 
 /// Schema-Forge command completer
 struct SchemaForgeCompleter;
@@ -84,12 +84,13 @@ impl Repl {
             .build();
 
         let completer = SchemaForgeCompleter;
-        let mut editor = Editor::<SchemaForgeCompleter, DefaultHistory>::with_config(config).map_err(|e| {
-            crate::error::SchemaForgeError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to initialize editor: {}", e),
-            ))
-        })?;
+        let mut editor = Editor::<SchemaForgeCompleter, DefaultHistory>::with_config(config)
+            .map_err(|e| {
+                crate::error::SchemaForgeError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to initialize editor: {}", e),
+                ))
+            })?;
 
         editor.set_helper(Some(completer));
 
@@ -126,17 +127,9 @@ impl Repl {
                     // Check if user typed just "/" - show command menu
                     if line == "/" {
                         match crate::cli::command_menu::show_command_menu() {
-                            Ok(crate::cli::command_menu::MenuResult::Command(cmd)) => {
+                            Ok(crate::cli::command_menu::MenuResult::Command { initial_input }) => {
                                 // User selected a command from menu
-                                println!("\r{}", cmd);
-                                match Command::parse(&cmd) {
-                                    Ok(command) => {
-                                        self.handle_command(command).await;
-                                    }
-                                    Err(e) => {
-                                        println!("{}", format_error(&e));
-                                    }
-                                }
+                                self.read_and_execute_input(Some(&initial_input)).await;
                             }
                             Ok(crate::cli::command_menu::MenuResult::Cancelled) => {
                                 // User cancelled, show prompt again
@@ -144,35 +137,8 @@ impl Repl {
                                 continue;
                             }
                             Ok(crate::cli::command_menu::MenuResult::TextInput) => {
-                                // User wants to type, read their input
-                                match self.editor.readline("> ") {
-                                    Ok(input) => {
-                                        let input = input.trim();
-                                        if !input.is_empty() {
-                                            let _ = self.editor.add_history_entry(input);
-                                            match Command::parse(input) {
-                                                Ok(command) => {
-                                                    self.handle_command(command).await;
-                                                }
-                                                Err(e) => {
-                                                    println!("{}", format_error(&e));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(ReadlineError::Interrupted) => {
-                                        println!("^C");
-                                        continue;
-                                    }
-                                    Err(ReadlineError::Eof) => {
-                                        println!();
-                                        self.running = false;
-                                    }
-                                    Err(err) => {
-                                        println!("Error: {:?}", err);
-                                        self.running = false;
-                                    }
-                                }
+                                // User wants to type a command manually.
+                                self.read_and_execute_input(Some("/")).await;
                             }
                             Err(e) => {
                                 println!("Error showing menu: {}", e);
@@ -230,7 +196,10 @@ impl Repl {
         println!(" ██║ ╚═╝ ██║██║╚██████╗██████╔╝╚██████╔╝███████╗");
         println!(" ╚═╝     ╚═╝╚═╝ ╚═════╝╚═════╝  ╚═════╝ ╚══════╝");
         println!();
-        println!("Intelligent Database Query Agent v{}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "Intelligent Database Query Agent v{}",
+            env!("CARGO_PKG_VERSION")
+        );
         println!();
         println!("Type / for available commands, or /help for more information.");
         println!();
@@ -268,6 +237,43 @@ impl Repl {
         println!();
     }
 
+    async fn read_and_execute_input(&mut self, initial_input: Option<&str>) {
+        let read_result = match initial_input {
+            Some(initial) => self.editor.readline_with_initial("> ", (initial, "")),
+            None => self.editor.readline("> "),
+        };
+
+        match read_result {
+            Ok(input) => {
+                let input = input.trim();
+                if input.is_empty() {
+                    return;
+                }
+
+                let _ = self.editor.add_history_entry(input);
+                match Command::parse(input) {
+                    Ok(command) => {
+                        self.handle_command(command).await;
+                    }
+                    Err(e) => {
+                        println!("{}", format_error(&e));
+                    }
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+            }
+            Err(ReadlineError::Eof) => {
+                println!();
+                self.running = false;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                self.running = false;
+            }
+        }
+    }
+
     /// Handle a command
     async fn handle_command(&mut self, command: Command) {
         match &command.command_type {
@@ -277,16 +283,14 @@ impl Repl {
                 }
                 self.running = false;
             }
-            _ => {
-                match commands::handle_command(&command, self.state.clone()).await {
-                    Ok(msg) => {
-                        println!("{}", msg);
-                    }
-                    Err(e) => {
-                        println!("{}", format_error(&e));
-                    }
+            _ => match commands::handle_command(&command, self.state.clone()).await {
+                Ok(msg) => {
+                    println!("{}", msg);
                 }
-            }
+                Err(e) => {
+                    println!("{}", format_error(&e));
+                }
+            },
         }
     }
 }
