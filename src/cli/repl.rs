@@ -2,18 +2,18 @@
 //!
 //! This module implements the interactive Read-Eval-Print Loop for Schema-Forge.
 
-use crate::cli::commands::{self, Command, format_error};
+use crate::cli::commands::{self, format_error, Command};
 use crate::config::SharedState;
 use crate::error::Result;
-use rustyline::error::ReadlineError;
-use rustyline::{CompletionType, Config, Editor};
-use rustyline::history::DefaultHistory;
 use rustyline::completion::Completer;
+use rustyline::error::ReadlineError;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
+use rustyline::history::DefaultHistory;
 use rustyline::validate::Validator;
-use rustyline::Helper;
 use rustyline::Context;
+use rustyline::Helper;
+use rustyline::{CompletionType, Config, Editor};
 
 /// Schema-Forge command completer
 struct SchemaForgeCompleter;
@@ -84,12 +84,13 @@ impl Repl {
             .build();
 
         let completer = SchemaForgeCompleter;
-        let mut editor = Editor::<SchemaForgeCompleter, DefaultHistory>::with_config(config).map_err(|e| {
-            crate::error::SchemaForgeError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to initialize editor: {}", e),
-            ))
-        })?;
+        let mut editor = Editor::<SchemaForgeCompleter, DefaultHistory>::with_config(config)
+            .map_err(|e| {
+                crate::error::SchemaForgeError::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to initialize editor: {}", e),
+                ))
+            })?;
 
         editor.set_helper(Some(completer));
 
@@ -127,14 +128,45 @@ impl Repl {
                     if line == "/" {
                         match crate::cli::command_menu::show_command_menu() {
                             Ok(crate::cli::command_menu::MenuResult::Command(cmd)) => {
-                                // User selected a command from menu
-                                println!("\r{}", cmd);
-                                match Command::parse(&cmd) {
-                                    Ok(command) => {
-                                        self.handle_command(command).await;
+                                // User selected a command from menu.
+                                let needs_args = matches!(
+                                    cmd.as_str(),
+                                    "/connect" | "/config" | "/use" | "/model"
+                                );
+                                let initial_input =
+                                    if needs_args { format!("{} ", cmd) } else { cmd };
+
+                                match self
+                                    .editor
+                                    .readline_with_initial("> ", (&initial_input, ""))
+                                {
+                                    Ok(input) => {
+                                        let input = input.trim();
+                                        if input.is_empty() {
+                                            continue;
+                                        }
+
+                                        let _ = self.editor.add_history_entry(input);
+                                        match Command::parse(input) {
+                                            Ok(command) => {
+                                                self.handle_command(command).await;
+                                            }
+                                            Err(e) => {
+                                                println!("{}", format_error(&e));
+                                            }
+                                        }
                                     }
-                                    Err(e) => {
-                                        println!("{}", format_error(&e));
+                                    Err(ReadlineError::Interrupted) => {
+                                        println!("^C");
+                                        continue;
+                                    }
+                                    Err(ReadlineError::Eof) => {
+                                        println!();
+                                        self.running = false;
+                                    }
+                                    Err(err) => {
+                                        println!("Error: {:?}", err);
+                                        self.running = false;
                                     }
                                 }
                             }
@@ -144,8 +176,8 @@ impl Repl {
                                 continue;
                             }
                             Ok(crate::cli::command_menu::MenuResult::TextInput) => {
-                                // User wants to type, read their input
-                                match self.editor.readline("> ") {
+                                // User wants to type, prefill with command prefix.
+                                match self.editor.readline_with_initial("> ", ("/", "")) {
                                     Ok(input) => {
                                         let input = input.trim();
                                         if !input.is_empty() {
@@ -230,7 +262,10 @@ impl Repl {
         println!(" ██║ ╚═╝ ██║██║╚██████╗██████╔╝╚██████╔╝███████╗");
         println!(" ╚═╝     ╚═╝╚═╝ ╚═════╝╚═════╝  ╚═════╝ ╚══════╝");
         println!();
-        println!("Intelligent Database Query Agent v{}", env!("CARGO_PKG_VERSION"));
+        println!(
+            "Intelligent Database Query Agent v{}",
+            env!("CARGO_PKG_VERSION")
+        );
         println!();
         println!("Type / for available commands, or /help for more information.");
         println!();
@@ -277,16 +312,14 @@ impl Repl {
                 }
                 self.running = false;
             }
-            _ => {
-                match commands::handle_command(&command, self.state.clone()).await {
-                    Ok(msg) => {
-                        println!("{}", msg);
-                    }
-                    Err(e) => {
-                        println!("{}", format_error(&e));
-                    }
+            _ => match commands::handle_command(&command, self.state.clone()).await {
+                Ok(msg) => {
+                    println!("{}", msg);
                 }
-            }
+                Err(e) => {
+                    println!("{}", format_error(&e));
+                }
+            },
         }
     }
 }
