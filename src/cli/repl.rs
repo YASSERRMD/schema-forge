@@ -129,11 +129,7 @@ impl Repl {
                             Ok(crate::cli::command_menu::MenuResult::Command(cmd)) => {
                                 // User selected a command from menu
                                 let needs_args = matches!(cmd.as_str(), "/connect" | "/config" | "/use" | "/model");
-                                let initial_input = if needs_args {
-                                    format!("{} ", cmd)
-                                } else {
-                                    cmd
-                                };
+                                let initial_input = if needs_args { format!("{} ", cmd) } else { cmd };
                                 match self.editor.readline_with_initial("> ", (&initial_input, "")) {
                                     Ok(input) => {
                                         let input = input.trim();

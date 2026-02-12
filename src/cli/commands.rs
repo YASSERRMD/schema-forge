@@ -121,14 +121,21 @@ impl Command {
                 _ => Err(SchemaForgeError::UnknownCommand(cmd.to_string())),
             }
         } else {
+            // Prefer natural language when input starts with common NL "show" forms.
+            let lower_input = input.to_lowercase();
+            if lower_input.starts_with("show me ") || lower_input.starts_with("show us ") {
+                return Ok(Command {
+                    command_type: CommandType::Query {
+                        text: input.to_string(),
+                    },
+                });
+            }
+
             // Check if it's a direct SQL query
             let upper_input = input.to_uppercase();
-            let sql_keywords = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "DESCRIBE", "DESC", "EXPLAIN", "WITH"];
+            let sql_keywords = ["SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE", "SHOW", "DESCRIBE", "DESC", "EXPLAIN", "WITH"];
 
-            let is_show_sql = upper_input.starts_with("SHOW ")
-                && !upper_input.starts_with("SHOW ME ")
-                && !upper_input.starts_with("SHOW US ");
-            let is_sql_query = sql_keywords.iter().any(|keyword| upper_input.starts_with(keyword)) || is_show_sql;
+            let is_sql_query = sql_keywords.iter().any(|keyword| upper_input.starts_with(keyword));
 
             if is_sql_query {
                 // Direct SQL execution
