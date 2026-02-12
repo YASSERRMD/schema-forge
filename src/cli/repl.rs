@@ -128,34 +128,13 @@ impl Repl {
                         match crate::cli::command_menu::show_command_menu() {
                             Ok(crate::cli::command_menu::MenuResult::Command(cmd)) => {
                                 // User selected a command from menu
-                                let needs_args = matches!(cmd.as_str(), "/connect" | "/config" | "/use" | "/model");
-                                let initial_input = if needs_args { format!("{} ", cmd) } else { cmd };
-                                match self.editor.readline_with_initial("> ", (&initial_input, "")) {
-                                    Ok(input) => {
-                                        let input = input.trim();
-                                        if !input.is_empty() {
-                                            let _ = self.editor.add_history_entry(input);
-                                            match Command::parse(input) {
-                                                Ok(command) => {
-                                                    self.handle_command(command).await;
-                                                }
-                                                Err(e) => {
-                                                    println!("{}", format_error(&e));
-                                                }
-                                            }
-                                        }
+                                println!("\r{}", cmd);
+                                match Command::parse(&cmd) {
+                                    Ok(command) => {
+                                        self.handle_command(command).await;
                                     }
-                                    Err(ReadlineError::Interrupted) => {
-                                        println!("^C");
-                                        continue;
-                                    }
-                                    Err(ReadlineError::Eof) => {
-                                        println!();
-                                        self.running = false;
-                                    }
-                                    Err(err) => {
-                                        println!("Error: {:?}", err);
-                                        self.running = false;
+                                    Err(e) => {
+                                        println!("{}", format_error(&e));
                                     }
                                 }
                             }
@@ -166,7 +145,7 @@ impl Repl {
                             }
                             Ok(crate::cli::command_menu::MenuResult::TextInput) => {
                                 // User wants to type, read their input
-                                match self.editor.readline_with_initial("> ", ("/", "")) {
+                                match self.editor.readline("> ") {
                                     Ok(input) => {
                                         let input = input.trim();
                                         if !input.is_empty() {
