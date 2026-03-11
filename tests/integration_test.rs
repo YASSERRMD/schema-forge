@@ -2,7 +2,10 @@
 //!
 //! Tests the actual functionality of connecting to databases and processing queries.
 
-use schema_forge::cli::commands::{Command, CommandType};
+use schema_forge::cli::commands::{self, Command, CommandType};
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[tokio::test]
 async fn test_command_parsing() {
@@ -117,4 +120,141 @@ async fn test_llm_provider_creation() {
     );
     assert_eq!(openai.provider_name(), "OpenAI");
     assert!(openai.has_api_key());
+
+    let ollama = schema_forge::llm::providers::ollama::OllamaProvider::new(
+        "ollama",
+        None,
+    );
+    assert_eq!(ollama.provider_name(), "Ollama");
+    assert!(ollama.has_api_key());
+}
+
+#[tokio::test]
+async fn test_sqlite_command_flow() {
+    use schema_forge::config::create_shared_state;
+
+    let database = TestSqliteDatabase::new("command-flow").await;
+    let state = create_shared_state();
+
+    let connect = Command::parse(&format!("/connect {}", database.url)).unwrap();
+    let connect_output = commands::handle_command(&connect, state.clone()).await.unwrap();
+    assert!(connect_output.contains("Connected to database"));
+
+    let index = Command::parse("/index").unwrap();
+    let index_output = commands::handle_command(&index, state.clone()).await.unwrap();
+    assert!(index_output.contains("1 tables"));
+    assert!(index_output.contains("3 columns"));
+
+    let sql = Command::parse("SELECT name, active FROM users ORDER BY id").unwrap();
+    let sql_output = commands::handle_command(&sql, state.clone()).await.unwrap();
+    assert!(sql_output.contains("Alice"));
+    assert!(sql_output.contains("Bob"));
+    assert!(sql_output.contains("Charlie"));
+}
+
+#[tokio::test]
+async fn test_index_updates_cached_schema() {
+    use schema_forge::config::create_shared_state;
+
+    let database = TestSqliteDatabase::new("schema-cache").await;
+    let state = create_shared_state();
+
+    let connect = Command::parse(&format!("/connect {}", database.url)).unwrap();
+    commands::handle_command(&connect, state.clone()).await.unwrap();
+
+    let index = Command::parse("/index").unwrap();
+    commands::handle_command(&index, state.clone()).await.unwrap();
+
+    let state_guard = state.read().await;
+    let db_manager = state_guard.database_manager.as_ref().unwrap();
+    let schema_index = db_manager.get_schema_index().await;
+
+    assert_eq!(schema_index.table_names(), vec!["users"]);
+}
+
+#[tokio::test]
+async fn test_greeting_query_returns_conversational_response() {
+    use schema_forge::config::create_shared_state;
+
+    let state = create_shared_state();
+    let greeting = Command::parse("hi").unwrap();
+    let output = commands::handle_command(&greeting, state).await.unwrap();
+
+    assert!(output.contains("Hello."));
+    assert!(output.contains("/connect <url>"));
+}
+
+#[tokio::test]
+async fn test_list_tables_query_uses_sqlite_schema_without_llm() {
+    use schema_forge::config::create_shared_state;
+
+    let database = TestSqliteDatabase::new("list-tables").await;
+    let state = create_shared_state();
+
+    let connect = Command::parse(&format!("/connect {}", database.url)).unwrap();
+    commands::handle_command(&connect, state.clone()).await.unwrap();
+
+    let list_tables = Command::parse("list all tables").unwrap();
+    let output = commands::handle_command(&list_tables, state).await.unwrap();
+
+    assert!(output.contains("SQLite schema:"));
+    assert!(output.contains("users"));
+}
+
+struct TestSqliteDatabase {
+    path: PathBuf,
+    url: String,
+}
+
+impl TestSqliteDatabase {
+    async fn new(name: &str) -> Self {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "schema-forge-{name}-{}-{timestamp}.db",
+            std::process::id()
+        ));
+        if path.exists() {
+            std::fs::remove_file(&path).unwrap();
+        }
+
+        let url = format!("sqlite://{}", path.display());
+        let pool = sqlx::sqlite::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::from_str(&url)
+                .unwrap()
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                active INTEGER NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query("INSERT INTO users (name, active) VALUES ('Alice', 1), ('Bob', 0), ('Charlie', 1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        pool.close().await;
+
+        Self { path, url }
+    }
+}
+
+impl Drop for TestSqliteDatabase {
+    fn drop(&mut self) {
+        if Path::new(&self.path).exists() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }

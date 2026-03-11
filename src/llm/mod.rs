@@ -12,6 +12,7 @@ pub mod providers {
     pub mod cohere;
     pub mod groq;
     pub mod minimax;
+    pub mod ollama;
     pub mod openai;
     pub mod qwen;
     pub mod xai;

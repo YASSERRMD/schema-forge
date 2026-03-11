@@ -1,286 +1,228 @@
-//! Command Menu (TUI popup)
-//!
-//! Displays a visual command menu like Claude Code when user types "/"
+//! Inline slash command palette for the persistent TUI.
 
 use ratatui::{
-    crossterm::{
-        cursor,
-        event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-        terminal::{EnterAlternateScreen, LeaveAlternateScreen},
-    },
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::Line,
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
-use std::io;
 
-/// Command menu item
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandItem {
-    /// Command name
-    pub name: String,
-    /// Description
-    pub description: String,
-    /// Example usage
-    pub example: String,
-    /// Whether the command needs additional user input
-    pub requires_args: bool,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub example: &'static str,
+    pub requires_arguments: bool,
 }
 
-/// All available commands
-fn get_commands() -> Vec<CommandItem> {
+pub fn command_items() -> Vec<CommandItem> {
     vec![
         CommandItem {
-            name: "/connect".to_string(),
-            description: "Connect to a database".to_string(),
-            example: "/connect postgresql://localhost/mydb".to_string(),
-            requires_args: true,
+            name: "/connect",
+            description: "Connect to a database",
+            example: "/connect sqlite://demo.db",
+            requires_arguments: true,
         },
         CommandItem {
-            name: "/index".to_string(),
-            description: "Index the database schema".to_string(),
-            example: "/index".to_string(),
-            requires_args: false,
+            name: "/index",
+            description: "Index the database schema",
+            example: "/index",
+            requires_arguments: false,
         },
         CommandItem {
-            name: "/config".to_string(),
-            description: "Set API key for LLM provider".to_string(),
-            example: "/config anthropic sk-ant-...".to_string(),
-            requires_args: true,
+            name: "/config",
+            description: "Configure a hosted LLM or local Ollama",
+            example: "/config ollama",
+            requires_arguments: true,
         },
         CommandItem {
-            name: "/providers".to_string(),
-            description: "List all available LLM providers".to_string(),
-            example: "/providers".to_string(),
-            requires_args: false,
+            name: "/providers",
+            description: "List configured and available providers",
+            example: "/providers",
+            requires_arguments: false,
         },
         CommandItem {
-            name: "/use".to_string(),
-            description: "Switch to a different LLM provider".to_string(),
-            example: "/use groq".to_string(),
-            requires_args: true,
+            name: "/use",
+            description: "Switch to a configured provider",
+            example: "/use groq",
+            requires_arguments: true,
         },
         CommandItem {
-            name: "/model".to_string(),
-            description: "Set model for a provider".to_string(),
-            example: "/model openai gpt-4".to_string(),
-            requires_args: true,
+            name: "/model",
+            description: "Set the model for a provider",
+            example: "/model openai gpt-4o",
+            requires_arguments: true,
         },
         CommandItem {
-            name: "/clear".to_string(),
-            description: "Clear chat context".to_string(),
-            example: "/clear".to_string(),
-            requires_args: false,
+            name: "/clear",
+            description: "Clear the current transcript",
+            example: "/clear",
+            requires_arguments: false,
         },
         CommandItem {
-            name: "/help".to_string(),
-            description: "Show detailed help".to_string(),
-            example: "/help".to_string(),
-            requires_args: false,
+            name: "/help",
+            description: "Show command help",
+            example: "/help",
+            requires_arguments: false,
         },
         CommandItem {
-            name: "/quit".to_string(),
-            description: "Exit Schema-Forge".to_string(),
-            example: "/quit".to_string(),
-            requires_args: false,
+            name: "/quit",
+            description: "Exit Schema-Forge",
+            example: "/quit",
+            requires_arguments: false,
         },
     ]
 }
 
-/// Result of running the command menu
-pub enum MenuResult {
-    /// User selected a command
-    Command { initial_input: String },
-    /// User cancelled (ESC)
-    Cancelled,
-    /// User wants to type their own input
-    TextInput,
+pub fn filtered_commands(input: &str) -> Vec<CommandItem> {
+    let trimmed = input.trim();
+    let needle = trimmed.strip_prefix('/').unwrap_or(trimmed).to_lowercase();
+
+    command_items()
+        .into_iter()
+        .filter(|command| {
+            needle.is_empty()
+                || command
+                    .name
+                    .trim_start_matches('/')
+                    .starts_with(needle.as_str())
+                || command.description.to_lowercase().contains(needle.as_str())
+        })
+        .collect()
 }
 
-/// Display the command menu and return selected command
-pub fn show_command_menu() -> io::Result<MenuResult> {
-    let commands = get_commands();
-    let mut state = ListState::default();
-    state.select(Some(0));
-
-    // Setup terminal
-    crossterm::terminal::enable_raw_mode()?;
-    crossterm::execute!(
-        io::stdout(),
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        cursor::Hide
-    )?;
-
-    let stdout = io::stdout();
-    let backend = ratatui::backend::CrosstermBackend::new(stdout);
-    let mut terminal = ratatui::Terminal::new(backend)?;
-
-    let result = run_menu(&mut terminal, &commands, &mut state);
-
-    // Restore terminal
-    crossterm::terminal::disable_raw_mode()?;
-    crossterm::execute!(
-        io::stdout(),
-        DisableMouseCapture,
-        LeaveAlternateScreen,
-        cursor::Show
-    )?;
-
-    result
-}
-
-fn run_menu(
-    terminal: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>,
-    commands: &[CommandItem],
-    state: &mut ListState,
-) -> io::Result<MenuResult> {
-    loop {
-        terminal.draw(|f| ui(f, commands, state))?;
-
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    return Ok(MenuResult::Cancelled);
-                }
-                KeyCode::Enter => {
-                    if let Some(selected) = state.selected() {
-                        let command = &commands[selected];
-                        let initial_input = if command.requires_args {
-                            format!("{} ", command.name)
-                        } else {
-                            command.name.clone()
-                        };
-
-                        return Ok(MenuResult::Command { initial_input });
-                    }
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let selected = state.selected().unwrap_or(0);
-                    if selected < commands.len() - 1 {
-                        state.select(Some(selected + 1));
-                    }
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    let selected = state.selected().unwrap_or(0);
-                    if selected > 0 {
-                        state.select(Some(selected - 1));
-                    }
-                }
-                KeyCode::Char('/') => {
-                    // User typed / again, switch to text input
-                    return Ok(MenuResult::TextInput);
-                }
-                _ => {}
-            }
-        }
+pub fn apply_command(command: &CommandItem) -> String {
+    if command.requires_arguments {
+        format!("{} ", command.name)
+    } else {
+        command.name.to_string()
     }
 }
 
-fn ui(f: &mut Frame, commands: &[CommandItem], state: &mut ListState) {
-    let size = f.area();
+pub fn render_command_palette(
+    frame: &mut Frame,
+    area: Rect,
+    commands: &[CommandItem],
+    state: &mut ListState,
+) {
+    let popup_area = centered_rect(78, 68, area);
+    frame.render_widget(Clear, popup_area);
 
-    // Create layout: main popup in center with header and scrollable list
-    let chunks = Layout::default()
+    let sections = Layout::default()
         .direction(Direction::Vertical)
-        .margin(1)
         .constraints([
-            Constraint::Length(9), // Fixed header height for ASCII art
-            Constraint::Min(5),    // Scrollable command list
-            Constraint::Length(4), // Command detail
-            Constraint::Length(3), // Fixed help text
+            Constraint::Length(3),
+            Constraint::Min(6),
+            Constraint::Length(3),
         ])
-        .split(size);
+        .split(popup_area);
 
-    // Header block (fixed, doesn't scroll) - with ASCII art
-    let header = Paragraph::new(vec![
-        Line::from(
-            "████████╗███████╗██████╗ ██████╗ ██████╗ ███████╗    █████╗ ██╗   ██╗████████╗",
-        ),
-        Line::from(
-            "╚══██╔══╝██╔════╝██╔══██╗██╔═══██╗██╔══██╗██╔════╝   ██╔══██╗██║   ██║╚══██╔══╝",
-        ),
-        Line::from(
-            "   ██║   █████╗  ██████╔╝██║   ██║██████╔╝█████╗     ███████║██║   ██║   ██║   ",
-        ),
-        Line::from(
-            "   ██║   ██╔══╝  ██╔══██╗██║   ██║██╔══██╗██╔══╝     ██╔══██║██║   ██║   ██║   ",
-        ),
-        Line::from(
-            "   ██║   ███████╗██║  ██║╚██████╔╝██║  ██║███████╗   ██║  ██║╚██████╔╝   ██║   ",
-        ),
-        Line::from(
-            "   ╚═╝   ╚══════╝╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝   ╚═╝  ╚═╝ ╚═════╝    ╚═╝   ",
-        ),
-    ])
-    .style(
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )
+    let header = Paragraph::new(Line::from(vec![
+        Span::styled("/", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::raw(" Slash Commands"),
+    ]))
     .block(
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan)),
     )
     .alignment(Alignment::Center);
+    frame.render_widget(header, sections[0]);
 
-    f.render_widget(header, chunks[0]);
-
-    // Command list (scrollable)
-    let items: Vec<ListItem> = commands
-        .iter()
-        .map(|cmd| ListItem::new(format!("  {:<12} {}", cmd.name, cmd.description)))
-        .collect();
+    let items = if commands.is_empty() {
+        vec![ListItem::new(Line::from(Span::styled(
+            "No matching commands.",
+            Style::default().fg(Color::DarkGray),
+        )))]
+    } else {
+        commands
+            .iter()
+            .map(|command| {
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("{:<12}", command.name),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(command.description),
+                ]))
+            })
+            .collect()
+    };
 
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Commands "),
         )
         .highlight_style(
             Style::default()
-                .add_modifier(Modifier::REVERSED)
                 .fg(Color::Black)
-                .bg(Color::Cyan),
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         );
+    frame.render_stateful_widget(list, sections[1], state);
 
-    f.render_stateful_widget(list, chunks[1], state);
-
-    let selected = state.selected().unwrap_or(0);
-    let example = format!("Example: {}", commands[selected].example);
-    let details = Paragraph::new(vec![
-        Line::from(example).style(Style::default().fg(Color::Gray))
-    ])
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Selected Command ")
-            .border_style(Style::default().fg(Color::Cyan)),
-    )
-    .alignment(Alignment::Left)
-    .wrap(Wrap { trim: true });
-
-    f.render_widget(details, chunks[2]);
-
-    // Help text at bottom (fixed, doesn't scroll)
-    let help_text =
-        vec![
-            Line::from(" ↑/k: Up  ↓/j: Down  Enter: Select  ESC/q: Cancel  /: Type command ")
-                .style(Style::default().fg(Color::Gray)),
-        ];
-
-    let help = Paragraph::new(help_text)
+    let example = state
+        .selected()
+        .and_then(|selected| commands.get(selected))
+        .map(|command| command.example)
+        .unwrap_or("Type to filter commands");
+    let footer = Paragraph::new(Line::from(example))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
+                .border_style(Style::default().fg(Color::Cyan))
+                .title(" Example "),
         )
         .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
+    frame.render_widget(footer, sections[2]);
+}
 
-    f.render_widget(help, chunks[3]);
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_filter_root_returns_commands() {
+        let commands = filtered_commands("/");
+        assert!(!commands.is_empty());
+        assert_eq!(commands[0].name, "/connect");
+    }
+
+    #[test]
+    fn test_filter_matches_prefix() {
+        let commands = filtered_commands("/mod");
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].name, "/model");
+    }
+
+    #[test]
+    fn test_apply_command_adds_trailing_space_for_args() {
+        let command = filtered_commands("/connect").remove(0);
+        assert_eq!(apply_command(&command), "/connect ");
+    }
 }
