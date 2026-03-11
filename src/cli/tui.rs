@@ -305,7 +305,7 @@ impl TuiApp {
 
     fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
-        let composer_height = if self.should_show_command_palette() { 5 } else { 4 };
+        let composer_height = if self.should_show_command_palette() { 9 } else { 4 };
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -317,17 +317,23 @@ impl TuiApp {
 
         self.render_header(frame, sections[0]);
         self.render_body(frame, sections[1]);
-        self.render_input(frame, sections[2]);
 
         if self.should_show_command_palette() {
+            let composer_sections = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(5), Constraint::Min(4)])
+                .split(sections[2]);
             let commands = command_menu::filtered_commands(&self.input);
             self.sync_command_selection(commands.len());
-            command_menu::render_command_palette(
+            command_menu::render_command_dock(
                 frame,
-                sections[1],
+                composer_sections[0],
                 &commands,
                 &mut self.command_state,
             );
+            self.render_input(frame, composer_sections[1]);
+        } else {
+            self.render_input(frame, sections[2]);
         }
     }
 
