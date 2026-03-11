@@ -4,7 +4,11 @@
 //! to support multiple database types (PostgreSQL, MySQL, SQLite, MSSQL).
 
 use crate::error::{Result, SchemaForgeError};
-use sqlx::{sqlite::SqlitePool, postgres::PgPool, mysql::MySqlPool};
+use sqlx::{
+    mysql::MySqlPool,
+    postgres::PgPool,
+    sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions},
+};
 use std::str::FromStr;
 
 // MSSQL support via tiberius will be added in Phase 2.3
@@ -92,6 +96,14 @@ const fn database_name_default_schema() -> &'static str {
     ""
 }
 
+fn sqlite_connection_string(url: &str) -> String {
+    if url.starts_with("sqlite://") || url.starts_with("sqlite:") {
+        url.to_string()
+    } else {
+        format!("sqlite://{}", url)
+    }
+}
+
 impl FromStr for DatabaseBackend {
     type Err = SchemaForgeError;
 
@@ -142,16 +154,10 @@ impl DatabasePool {
 
         match backend {
             DatabaseBackend::SQLite => {
-                // Strip the sqlite: or sqlite:// prefix
-                let db_path = if let Some(stripped) = url.strip_prefix("sqlite://") {
-                    stripped
-                } else if let Some(stripped) = url.strip_prefix("sqlite:") {
-                    stripped
-                } else {
-                    url
-                };
-
-                let pool = SqlitePool::connect(db_path).await
+                let options = SqliteConnectOptions::from_str(&sqlite_connection_string(url))
+                    .map_err(|e| SchemaForgeError::Config(format!("Invalid SQLite URL '{}': {}", url, e)))?
+                    .create_if_missing(true);
+                let pool = SqlitePool::connect_with(options).await
                     .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
                 Ok(DatabasePool::Sqlite(pool))
             }
@@ -180,17 +186,12 @@ impl DatabasePool {
 
         match backend {
             DatabaseBackend::SQLite => {
-                let db_path = if let Some(stripped) = url.strip_prefix("sqlite://") {
-                    stripped
-                } else if let Some(stripped) = url.strip_prefix("sqlite:") {
-                    stripped
-                } else {
-                    url
-                };
-
-                let pool = sqlx::sqlite::SqlitePoolOptions::new()
+                let options = SqliteConnectOptions::from_str(&sqlite_connection_string(url))
+                    .map_err(|e| SchemaForgeError::Config(format!("Invalid SQLite URL '{}': {}", url, e)))?
+                    .create_if_missing(true);
+                let pool = SqlitePoolOptions::new()
                     .max_connections(max_connections)
-                    .connect(db_path)
+                    .connect_with(options)
                     .await
                     .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
                 Ok(DatabasePool::Sqlite(pool))
@@ -314,5 +315,14 @@ mod tests {
         assert_eq!(DatabaseBackend::MySQL.to_string(), "MySQL");
         assert_eq!(DatabaseBackend::SQLite.to_string(), "SQLite");
         assert_eq!(DatabaseBackend::MSSQL.to_string(), "Microsoft SQL Server");
+    }
+
+    #[test]
+    fn test_sqlite_connection_string_preserves_absolute_paths() {
+        assert_eq!(
+            sqlite_connection_string("sqlite:///tmp/schema-forge.db"),
+            "sqlite:///tmp/schema-forge.db"
+        );
+        assert_eq!(sqlite_connection_string("test.db"), "sqlite://test.db");
     }
 }
