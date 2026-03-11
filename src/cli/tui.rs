@@ -512,29 +512,7 @@ impl TuiApp {
         let mut lines = Vec::new();
 
         for entry in &self.transcript {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "● ",
-                    Style::default()
-                        .fg(entry.accent())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    entry.title,
-                    Style::default()
-                        .fg(entry.accent())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-
-            for line in entry.body.lines() {
-                lines.push(Line::from(vec![
-                    Span::styled("│ ", Style::default().fg(entry.accent())),
-                    Span::raw(line.to_string()),
-                ]));
-            }
-
-            lines.push(Line::from(""));
+            lines.extend(transcript_entry_lines(entry));
         }
 
         if self.busy {
@@ -918,6 +896,13 @@ impl TuiApp {
     }
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct TranscriptBodySections {
+    lead: String,
+    sql: Option<String>,
+    results: Option<String>,
+}
+
 fn status_pill(label: &str, color: Color) -> Span<'static> {
     Span::styled(
         format!("[{}]", label),
@@ -942,6 +927,130 @@ fn example_line(text: &str) -> Line<'static> {
     ])
 }
 
+fn transcript_entry_lines(entry: &TranscriptEntry) -> Vec<Line<'static>> {
+    let accent = entry.accent();
+    let body_style = match entry.kind {
+        TranscriptKind::Assistant | TranscriptKind::User => Style::default().fg(Color::White),
+        TranscriptKind::System => Style::default().fg(Color::Gray),
+        TranscriptKind::Error => Style::default().fg(Color::Red),
+    };
+
+    let mut lines = vec![Line::from(vec![
+        Span::styled(
+            "● ",
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            entry.title,
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        ),
+    ])];
+
+    let sections = split_transcript_body(&entry.body);
+    if !sections.lead.is_empty() {
+        for line in sections.lead.lines() {
+            lines.push(prefixed_line("│ ", accent, line, body_style));
+        }
+    }
+
+    if let Some(sql) = sections.sql {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(section_header_line("SQL", Color::Cyan));
+        for line in sql.lines() {
+            lines.push(prefixed_line("│   ", Color::Cyan, line, Style::default().fg(Color::White)));
+        }
+    }
+
+    if let Some(results) = sections.results {
+        if !lines.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.push(section_header_line("Results", Color::Green));
+        for line in results.lines() {
+            lines.push(prefixed_line(
+                "│   ",
+                Color::Green,
+                line,
+                Style::default().fg(Color::White),
+            ));
+        }
+    }
+
+    lines.push(Line::from(""));
+    lines
+}
+
+fn prefixed_line(prefix: &str, prefix_color: Color, text: &str, style: Style) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(prefix.to_string(), Style::default().fg(prefix_color)),
+        Span::styled(text.to_string(), style),
+    ])
+}
+
+fn section_header_line(label: &str, color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("├─ ", Style::default().fg(color)),
+        Span::styled(
+            label.to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+    ])
+}
+
+fn split_transcript_body(body: &str) -> TranscriptBodySections {
+    let body = body.trim();
+    if body.is_empty() {
+        return TranscriptBodySections::default();
+    }
+
+    let sql_marker = "SQL:\n";
+    let results_marker = "Results:\n";
+
+    if let Some(sql_start) = marker_position(body, sql_marker) {
+        let lead = body[..sql_start].trim().to_string();
+        let after_sql = &body[sql_start + sql_marker.len()..];
+        let (sql, results) = if let Some(results_start) = marker_position(after_sql, results_marker) {
+            (
+                Some(after_sql[..results_start].trim().to_string()),
+                Some(after_sql[results_start + results_marker.len()..].trim().to_string()),
+            )
+        } else {
+            (Some(after_sql.trim().to_string()), None)
+        };
+
+        return TranscriptBodySections {
+            lead,
+            sql: sql.filter(|value| !value.is_empty()),
+            results: results.filter(|value| !value.is_empty()),
+        };
+    }
+
+    if let Some(results_start) = marker_position(body, results_marker) {
+        return TranscriptBodySections {
+            lead: body[..results_start].trim().to_string(),
+            sql: None,
+            results: Some(body[results_start + results_marker.len()..].trim().to_string())
+                .filter(|value| !value.is_empty()),
+        };
+    }
+
+    TranscriptBodySections {
+        lead: body.to_string(),
+        sql: None,
+        results: None,
+    }
+}
+
+fn marker_position(body: &str, marker: &str) -> Option<usize> {
+    if body.starts_with(marker) {
+        Some(0)
+    } else {
+        body.find(&format!("\n\n{marker}")).map(|index| index + 2)
+    }
+}
+
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -957,4 +1066,41 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Re
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_transcript_body_with_sql_and_results() {
+        let body = "Found 2 users.\n\nSQL:\nSELECT * FROM users\n\nResults:\n+----+\n| id |\n+----+";
+        let sections = split_transcript_body(body);
+
+        assert_eq!(sections.lead, "Found 2 users.");
+        assert_eq!(sections.sql.as_deref(), Some("SELECT * FROM users"));
+        assert_eq!(
+            sections.results.as_deref(),
+            Some("+----+\n| id |\n+----+")
+        );
+    }
+
+    #[test]
+    fn test_split_transcript_body_with_sql_only() {
+        let body = "SQL:\nSELECT 1";
+        let sections = split_transcript_body(body);
+
+        assert_eq!(sections.lead, "");
+        assert_eq!(sections.sql.as_deref(), Some("SELECT 1"));
+        assert!(sections.results.is_none());
+    }
+
+    #[test]
+    fn test_split_transcript_body_plain_text() {
+        let sections = split_transcript_body("Hello there.");
+
+        assert_eq!(sections.lead, "Hello there.");
+        assert!(sections.sql.is_none());
+        assert!(sections.results.is_none());
+    }
 }

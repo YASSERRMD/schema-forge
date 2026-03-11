@@ -565,7 +565,9 @@ Examples:
                     )
                     .await
                     {
-                        Ok(summary) => format!("{}\n\nSQL:\n{}", summary, sql_query),
+                        Ok(summary) => {
+                            format!("{}\n\nSQL:\n{}\n\nResults:\n{}", summary, sql_query, results)
+                        }
                         Err(_) => format!("SQL:\n{}\n\nResults:\n{}", sql_query, results),
                     }
                 }
@@ -610,10 +612,10 @@ fn greeting_response(
 ) -> String {
     match backend {
         Some(backend) => format!(
-            "Hello. You're connected to {}. I can list tables, run SQL directly, or use /config ollama for natural-language queries.",
+            "Hello. You're connected to {}. Ask for tables, inspect the schema, run SQL directly, or use /config ollama and I will turn plain English into backend-correct queries.",
             backend
         ),
-        None => "Hello. Connect a database with /connect <url>, then I can list tables, run SQL directly, or use /config ollama for natural-language queries.".to_string(),
+        None => "Hello. Start with /connect <url>. I will index the schema immediately, then you can /config ollama and ask for queries in plain English.".to_string(),
     }
 }
 
