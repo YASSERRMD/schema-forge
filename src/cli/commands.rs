@@ -131,17 +131,23 @@ impl Command {
             // Check if it's a direct SQL query
             let upper_input = input.to_uppercase();
             let sql_keywords = [
-                "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "TRUNCATE",
-                "DESCRIBE", "DESC", "EXPLAIN", "WITH",
+                "SELECT",
+                "INSERT",
+                "UPDATE",
+                "DELETE",
+                "CREATE",
+                "DROP",
+                "ALTER",
+                "TRUNCATE",
+                "DESCRIBE",
+                "DESC",
+                "EXPLAIN",
+                "WITH",
             ];
 
-            let is_show_sql = upper_input.starts_with("SHOW ")
-                && !upper_input.starts_with("SHOW ME ")
-                && !upper_input.starts_with("SHOW US ");
-            let is_sql_query = sql_keywords
-                .iter()
-                .any(|keyword| upper_input.starts_with(keyword))
-                || is_show_sql;
+            let is_sql_query = sql_keywords.iter().any(|keyword| {
+                upper_input == *keyword || upper_input.starts_with(&format!("{} ", keyword))
+            }) || is_show_statement(&upper_input);
 
             if is_sql_query {
                 // Direct SQL execution
@@ -160,6 +166,27 @@ impl Command {
             }
         }
     }
+}
+
+fn is_show_statement(upper_input: &str) -> bool {
+    let show_prefixes = [
+        "SHOW TABLE",
+        "SHOW TABLES",
+        "SHOW DATABASE",
+        "SHOW DATABASES",
+        "SHOW COLUMN",
+        "SHOW COLUMNS",
+        "SHOW CREATE",
+        "SHOW INDEX",
+        "SHOW INDEXES",
+        "SHOW STATUS",
+        "SHOW VARIABLES",
+        "SHOW PROCESSLIST",
+    ];
+
+    show_prefixes.iter().any(|prefix| {
+        upper_input == *prefix || upper_input.starts_with(&format!("{} ", prefix))
+    })
 }
 
 /// Handle a command and return the result message
@@ -599,6 +626,28 @@ mod tests {
             cmd.command_type,
             CommandType::Query {
                 text: "Show me all users".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_show_query_without_me() {
+        let cmd = Command::parse("show all users").unwrap();
+        assert_eq!(
+            cmd.command_type,
+            CommandType::Query {
+                text: "show all users".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_show_tables_as_direct_sql() {
+        let cmd = Command::parse("SHOW TABLES").unwrap();
+        assert_eq!(
+            cmd.command_type,
+            CommandType::DirectSql {
+                sql: "SHOW TABLES".to_string()
             }
         );
     }
