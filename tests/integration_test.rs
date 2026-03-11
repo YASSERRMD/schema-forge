@@ -40,6 +40,10 @@ async fn test_database_components() {
     let sqlite_backend = DatabaseBackend::from_url("sqlite://test.db").unwrap();
     assert_eq!(sqlite_backend, DatabaseBackend::SQLite);
 
+    let oracle_backend =
+        DatabaseBackend::from_url("oracle://scott:tiger@localhost:1521/FREEPDB1").unwrap();
+    assert_eq!(oracle_backend, DatabaseBackend::Oracle);
+
     // Test schema data structures
     use schema_forge::database::schema::{Column, ColumnType, SchemaIndex, Table};
 
@@ -139,6 +143,7 @@ async fn test_sqlite_command_flow() {
     let connect = Command::parse(&format!("/connect {}", database.url)).unwrap();
     let connect_output = commands::handle_command(&connect, state.clone()).await.unwrap();
     assert!(connect_output.contains("Connected to database"));
+    assert!(connect_output.contains("Indexed immediately"));
 
     let index = Command::parse("/index").unwrap();
     let index_output = commands::handle_command(&index, state.clone()).await.unwrap();
@@ -170,6 +175,25 @@ async fn test_index_updates_cached_schema() {
     let schema_index = db_manager.get_schema_index().await;
 
     assert_eq!(schema_index.table_names(), vec!["users"]);
+}
+
+#[tokio::test]
+async fn test_connect_detects_database_version() {
+    use schema_forge::config::create_shared_state;
+
+    let database = TestSqliteDatabase::new("version-detect").await;
+    let state = create_shared_state();
+
+    let connect = Command::parse(&format!("/connect {}", database.url)).unwrap();
+    let connect_output = commands::handle_command(&connect, state.clone()).await.unwrap();
+    assert!(connect_output.contains("SQLite"));
+
+    let state_guard = state.read().await;
+    let db_manager = state_guard.database_manager.as_ref().unwrap();
+    let version = db_manager.database_version().await;
+
+    assert!(version.is_some());
+    assert!(version.unwrap().starts_with("SQLite "));
 }
 
 #[tokio::test]

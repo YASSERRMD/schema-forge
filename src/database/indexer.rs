@@ -6,6 +6,7 @@
 
 use crate::database::schema::{Column, ColumnType, ForeignKeyReference, SchemaIndex, Table, TableRelationship};
 use crate::error::{Result, SchemaForgeError};
+use oracle_rs::Connection as OracleConnection;
 use sqlx::{postgres::PgPool, mysql::MySqlPool, sqlite::SqlitePool, Row};
 
 /// Index PostgreSQL database schema
@@ -454,6 +455,185 @@ pub async fn index_sqlite(pool: &SqlitePool) -> Result<SchemaIndex> {
     }
 
     Ok(schema_index)
+}
+
+/// Index Oracle database schema
+pub async fn index_oracle(connection: &OracleConnection) -> Result<SchemaIndex> {
+    let mut schema_index = SchemaIndex::new();
+
+    let context_result = connection
+        .query(
+            "SELECT SYS_CONTEXT('USERENV', 'DB_NAME') AS db_name,
+                    SYS_CONTEXT('USERENV', 'CURRENT_SCHEMA') AS schema_name
+             FROM dual",
+            &[],
+        )
+        .await
+        .map_err(|e| SchemaForgeError::db_query_message("oracle context lookup", e.to_string()))?;
+
+    if let Some(row) = context_result.rows.first() {
+        schema_index.database_name = oracle_row_string(row, "DB_NAME");
+        schema_index.schema_name = oracle_row_string(row, "SCHEMA_NAME");
+    }
+
+    let tables_result = connection
+        .query(
+            "SELECT table_name AS object_name, 'TABLE' AS object_type FROM user_tables
+             UNION ALL
+             SELECT view_name AS object_name, 'VIEW' AS object_type FROM user_views
+             ORDER BY object_name",
+            &[],
+        )
+        .await
+        .map_err(|e| SchemaForgeError::db_query_message("oracle table lookup", e.to_string()))?;
+
+    for row in &tables_result.rows {
+        let table_name = oracle_row_string(row, "OBJECT_NAME").unwrap_or_default();
+        let object_type = oracle_row_string(row, "OBJECT_TYPE").unwrap_or_else(|| "TABLE".to_string());
+
+        if table_name.is_empty() {
+            continue;
+        }
+
+        let mut table = if object_type.eq_ignore_ascii_case("VIEW") {
+            Table::new_view(&table_name)
+        } else {
+            Table::new(&table_name)
+        };
+
+        let columns_result = connection
+            .query(
+                "SELECT column_name,
+                        data_type,
+                        data_length,
+                        data_precision,
+                        data_scale,
+                        nullable,
+                        data_default,
+                        column_id
+                 FROM user_tab_columns
+                 WHERE table_name = :1
+                 ORDER BY column_id",
+                &[table_name.clone().into()],
+            )
+            .await
+            .map_err(|e| SchemaForgeError::db_query_message("oracle column lookup", e.to_string()))?;
+
+        for column_row in &columns_result.rows {
+            let column_name = oracle_row_string(column_row, "COLUMN_NAME").unwrap_or_default();
+            let data_type = oracle_row_string(column_row, "DATA_TYPE").unwrap_or_else(|| "VARCHAR2".to_string());
+            let data_length = oracle_row_i64(column_row, "DATA_LENGTH");
+            let data_precision = oracle_row_i64(column_row, "DATA_PRECISION");
+            let data_scale = oracle_row_i64(column_row, "DATA_SCALE");
+            let nullable = oracle_row_string(column_row, "NULLABLE").unwrap_or_else(|| "Y".to_string());
+            let default_value = oracle_row_string(column_row, "DATA_DEFAULT")
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty());
+
+            table.add_column(Column {
+                name: column_name,
+                column_type: ColumnType {
+                    base_type: data_type,
+                    length: data_precision.or(data_length),
+                    scale: data_scale,
+                    array_dimensions: None,
+                },
+                nullable: nullable == "Y",
+                default_value,
+                is_primary_key: false,
+                is_foreign_key: false,
+                references: None,
+                is_unique: false,
+                comment: None,
+            });
+        }
+
+        let pk_result = connection
+            .query(
+                "SELECT cc.column_name
+                 FROM user_constraints c
+                 JOIN user_cons_columns cc
+                   ON c.constraint_name = cc.constraint_name
+                 WHERE c.table_name = :1
+                   AND c.constraint_type = 'P'
+                 ORDER BY cc.position",
+                &[table_name.clone().into()],
+            )
+            .await
+            .map_err(|e| SchemaForgeError::db_query_message("oracle primary key lookup", e.to_string()))?;
+
+        for pk_row in &pk_result.rows {
+            if let Some(pk_column) = oracle_row_string(pk_row, "COLUMN_NAME") {
+                table.primary_keys.push(pk_column.clone());
+                if let Some(column) = table.columns.iter_mut().find(|column| column.name == pk_column) {
+                    column.is_primary_key = true;
+                    column.is_unique = true;
+                }
+            }
+        }
+
+        let fk_result = connection
+            .query(
+                "SELECT acc.column_name,
+                        rcc.table_name AS foreign_table_name,
+                        rcc.column_name AS foreign_column_name
+                 FROM user_constraints ac
+                 JOIN user_cons_columns acc
+                   ON ac.constraint_name = acc.constraint_name
+                 JOIN user_constraints rc
+                   ON ac.r_constraint_name = rc.constraint_name
+                 JOIN user_cons_columns rcc
+                   ON rc.constraint_name = rcc.constraint_name
+                  AND acc.position = rcc.position
+                 WHERE ac.constraint_type = 'R'
+                   AND ac.table_name = :1
+                 ORDER BY acc.position",
+                &[table_name.clone().into()],
+            )
+            .await
+            .map_err(|e| SchemaForgeError::db_query_message("oracle foreign key lookup", e.to_string()))?;
+
+        for fk_row in &fk_result.rows {
+            let column_name = oracle_row_string(fk_row, "COLUMN_NAME").unwrap_or_default();
+            let foreign_table = oracle_row_string(fk_row, "FOREIGN_TABLE_NAME").unwrap_or_default();
+            let foreign_column = oracle_row_string(fk_row, "FOREIGN_COLUMN_NAME").unwrap_or_default();
+
+            let fk_ref = ForeignKeyReference {
+                table: foreign_table.clone(),
+                column: foreign_column.clone(),
+                on_delete: None,
+                on_update: None,
+            };
+
+            table.foreign_keys.push(fk_ref.clone());
+            if let Some(column) = table.columns.iter_mut().find(|column| column.name == column_name) {
+                column.is_foreign_key = true;
+                column.references = Some(fk_ref);
+            }
+
+            schema_index.relationships.push(TableRelationship {
+                from_table: table_name.clone(),
+                from_column: column_name,
+                to_table: foreign_table,
+                to_column: foreign_column,
+                relationship_type: "many-to-one".to_string(),
+            });
+        }
+
+        schema_index.add_table(table);
+    }
+
+    Ok(schema_index)
+}
+
+fn oracle_row_string(row: &oracle_rs::Row, column_name: &str) -> Option<String> {
+    row.get_by_name(column_name)
+        .map(|value| value.to_string())
+        .filter(|value| value != "NULL")
+}
+
+fn oracle_row_i64(row: &oracle_rs::Row, column_name: &str) -> Option<i64> {
+    row.get_by_name(column_name).and_then(|value| value.as_i64())
 }
 
 /// Index MSSQL database schema

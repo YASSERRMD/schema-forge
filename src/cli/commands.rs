@@ -4,6 +4,7 @@
 
 use crate::config::SharedState;
 use crate::error::{Result, SchemaForgeError};
+use crate::llm::provider::{GenerationParams, LLMProvider, Message};
 
 /// Command types
 #[derive(Debug, Clone, PartialEq)]
@@ -205,6 +206,7 @@ pub async fn handle_command(command: &Command, state: SharedState) -> Result<Str
                 && !url_lower.starts_with("mariadb://")
                 && !url_lower.starts_with("sqlite://")
                 && !url_lower.starts_with("sqlite:")
+                && !url_lower.starts_with("oracle://")
                 && !url_lower.starts_with("mssql://")
                 && !url_lower.starts_with("sqlserver://")
                 && !url_lower.ends_with(".db")
@@ -212,19 +214,42 @@ pub async fn handle_command(command: &Command, state: SharedState) -> Result<Str
                 && !url_lower.ends_with(".sqlite3")
             {
                 return Err(SchemaForgeError::InvalidInput(format!(
-                    "Invalid database URL: {}. Supported: postgresql://, mysql://, sqlite://, sqlite:, mssql://",
+                    "Invalid database URL: {}. Supported: postgresql://, mysql://, sqlite://, sqlite:, oracle://, mssql://",
                     url
                 )));
             }
 
             // Actually connect to the database
             let manager = crate::database::manager::DatabaseManager::connect(url).await?;
+            let version = manager
+                .database_version()
+                .await
+                .unwrap_or_else(|| manager.backend().to_string());
+            let auto_index_message = match manager.reindex().await {
+                Ok(()) => {
+                    let schema_index = manager.get_schema_index().await;
+                    let table_count = schema_index.tables.len();
+                    let column_count: usize =
+                        schema_index.tables.values().map(|table| table.columns.len()).sum();
+                    format!(
+                        " Indexed immediately: {} tables, {} columns. Use /index any time to refresh.",
+                        table_count, column_count
+                    )
+                }
+                Err(error) => format!(
+                    " Auto-indexing failed: {}. Use /index to retry later.",
+                    error
+                ),
+            };
 
             // Store the database manager in state
             let mut state_guard = state.write().await;
             state_guard.set_database_manager(manager);
 
-            Ok(format!("Connected to database: {}", url))
+            Ok(format!(
+                "Connected to database: {} ({}){}",
+                url, version, auto_index_message
+            ))
         }
         CommandType::Index => {
             // Check if database is connected
@@ -384,7 +409,8 @@ Set a specific model:
             Ok(format!("Switched to provider: {} (saved)", provider))
         }
         CommandType::Clear => {
-            // Clear chat context (to be implemented with message history)
+            let mut state_guard = state.write().await;
+            state_guard.clear_conversation_history();
             Ok("Chat context cleared".to_string())
         }
         CommandType::Help => {
@@ -392,7 +418,7 @@ Set a specific model:
 Schema-Forge Commands
 
 Database Commands:
-  /connect <url>     Connect to a database (postgresql://, mysql://, sqlite://, mssql://)
+  /connect <url>     Connect to a database (postgresql://, mysql://, sqlite://, oracle://, mssql://)
   /index             Index the database schema
 
 Configuration:
@@ -418,6 +444,7 @@ Natural Language:
 
 Examples:
   /connect postgresql://localhost/mydb
+  /connect oracle://scott:tiger@localhost:1521/FREEPDB1
   /index
   /config anthropic sk-ant-...
   /config ollama
@@ -449,7 +476,10 @@ Examples:
             // This is a natural language query - process it using LLM
             let state_guard = state.read().await;
 
-            if is_greeting_query(text) {
+            if is_greeting_query(text)
+                && (state_guard.database_manager.is_none()
+                    || state_guard.get_current_provider().is_none())
+            {
                 let backend = state_guard
                     .database_manager
                     .as_ref()
@@ -485,6 +515,9 @@ Examples:
                 })?
                 .clone();
 
+            let conversation_history = state_guard.conversation_history();
+            let backend = db_manager.backend();
+            let database_version = db_manager.database_version().await;
             let schema_context = schema_index.format_for_llm();
 
             // Get configured model for this provider
@@ -496,22 +529,52 @@ Examples:
             // Create the appropriate LLM provider with configured model
             let provider = create_llm_provider(&current_provider, &api_key, model)?;
 
-            // Generate SQL from natural language
-            let sql_query = provider
-                .generate_sql(&schema_context, text)
-                .await
-                .map_err(|e| SchemaForgeError::LLMApiError {
+            let agent_reply = run_agent_turn(
+                provider.as_ref(),
+                &conversation_history,
+                backend,
+                database_version.as_deref(),
+                &schema_context,
+                text,
+            )
+            .await
+            .map_err(|e| {
+                SchemaForgeError::LLMApiError {
                     provider: current_provider.clone(),
-                    message: format!("Failed to generate SQL: {}", e),
+                    message: format!("Agent planning failed: {}", e),
                     status: 0,
                 })?;
 
-            // Execute the SQL query
-            let state_guard = state.read().await;
-            let db_manager = state_guard.database_manager.as_ref().unwrap();
-            let results = execute_sql_query(db_manager, &sql_query).await?;
+            let reply = match agent_reply {
+                AgentReply::Chat(message) | AgentReply::Clarify(message) => message,
+                AgentReply::Sql(sql_query) => {
+                    let state_guard = state.read().await;
+                    let db_manager = state_guard.database_manager.as_ref().unwrap();
+                    let results = execute_sql_query(db_manager, &sql_query).await?;
+                    drop(state_guard);
 
-            Ok(format!("SQL:\n{}\n\nResults:\n{}", sql_query, results))
+                    match summarize_sql_results(
+                        provider.as_ref(),
+                        &conversation_history,
+                        backend,
+                        database_version.as_deref(),
+                        text,
+                        &sql_query,
+                        &results,
+                    )
+                    .await
+                    {
+                        Ok(summary) => format!("{}\n\nSQL:\n{}", summary, sql_query),
+                        Err(_) => format!("SQL:\n{}\n\nResults:\n{}", sql_query, results),
+                    }
+                }
+            };
+
+            let mut state_guard = state.write().await;
+            state_guard.push_conversation_message(Message::user(text.clone()));
+            state_guard.push_conversation_message(Message::assistant(reply.clone()));
+
+            Ok(reply)
         }
     }
 }
@@ -615,6 +678,193 @@ fn normalize_query_text(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AgentReply {
+    Chat(String),
+    Sql(String),
+    Clarify(String),
+}
+
+async fn run_agent_turn(
+    provider: &dyn LLMProvider,
+    conversation_history: &[Message],
+    backend: crate::database::connection::DatabaseBackend,
+    database_version: Option<&str>,
+    schema_context: &str,
+    user_query: &str,
+) -> Result<AgentReply> {
+    let mut messages = vec![Message::system(build_agent_system_prompt(
+        backend,
+        database_version,
+        schema_context,
+    ))];
+    messages.extend(conversation_history.iter().cloned());
+    messages.push(Message::user(user_query.to_string()));
+
+    let params = GenerationParams::new().with_temperature(0.1);
+    let response = provider.generate(&messages, Some(&params)).await?;
+    Ok(parse_agent_reply(&response.content))
+}
+
+async fn summarize_sql_results(
+    provider: &dyn LLMProvider,
+    conversation_history: &[Message],
+    backend: crate::database::connection::DatabaseBackend,
+    database_version: Option<&str>,
+    user_query: &str,
+    sql_query: &str,
+    results: &str,
+) -> Result<String> {
+    let mut messages = vec![Message::system(build_result_summary_prompt(
+        backend,
+        database_version,
+    ))];
+    messages.extend(conversation_history.iter().cloned());
+    messages.push(Message::user(user_query.to_string()));
+    messages.push(Message::assistant(format!("<sql>{}</sql>", sql_query)));
+    messages.push(Message::user(format!(
+        "The SQL was executed successfully.\n\nSQL results:\n{}\n\nRespond to the user in a conversational way. Mention if there were no rows. Keep it concise.",
+        truncate_for_prompt(results, 4000)
+    )));
+
+    let params = GenerationParams::new().with_temperature(0.2);
+    let response = provider.generate(&messages, Some(&params)).await?;
+    Ok(clean_agent_summary(response.content.trim()))
+}
+
+fn build_agent_system_prompt(
+    backend: crate::database::connection::DatabaseBackend,
+    database_version: Option<&str>,
+    schema_context: &str,
+) -> String {
+    let version = database_version.unwrap_or("unknown version");
+    format!(
+        "You are Schema-Forge, an interactive database agent.\n\
+         Hold a natural multi-turn conversation, remember prior turns, and decide whether to chat, ask a follow-up question, or run SQL.\n\n\
+         Connected backend: {backend}\n\
+         Connected version: {version}\n\
+         Dialect guidance: {}\n\n\
+         Schema snapshot:\n{}\n\n\
+         Response contract:\n\
+         - Reply with <chat>...</chat> for conversational responses, greetings, capability explanations, or answers that do not require a database query.\n\
+         - Reply with <clarify>...</clarify> when the request is ambiguous or missing an important filter.\n\
+         - Reply with <sql>...</sql> when a database query should be executed.\n\
+         - Inside <sql>, return only the SQL statement.\n\
+         - Never use tables or columns that are not present in the schema snapshot.\n\
+         - Never use metadata tables from the wrong database family.\n\
+         - Prefer syntax that is valid for the connected backend and version.\n\
+         - If the user asks for listings of tables or schema details, you may answer in <chat> based on the schema snapshot.\n\
+         - Keep replies concise and operational.",
+        backend_sql_guidance(backend),
+        schema_context
+    )
+}
+
+fn build_result_summary_prompt(
+    backend: crate::database::connection::DatabaseBackend,
+    database_version: Option<&str>,
+) -> String {
+    format!(
+        "You are Schema-Forge, an interactive database agent.\n\
+         Summarize SQL results for the user after execution against {} ({}).\n\
+         Be conversational, precise, and concise.\n\
+         If the result set is empty, say that clearly.\n\
+         Do not invent data.\n\
+         Do not wrap the reply in markdown fences or XML tags.",
+        backend,
+        database_version.unwrap_or("unknown version")
+    )
+}
+
+fn backend_sql_guidance(
+    backend: crate::database::connection::DatabaseBackend,
+) -> &'static str {
+    match backend {
+        crate::database::connection::DatabaseBackend::PostgreSQL => {
+            "Use PostgreSQL syntax. Prefer ILIKE for case-insensitive matching and LIMIT for row limits."
+        }
+        crate::database::connection::DatabaseBackend::MySQL => {
+            "Use MySQL syntax. Prefer LIMIT for row limits and CAST(...) for explicit type conversion."
+        }
+        crate::database::connection::DatabaseBackend::SQLite => {
+            "Use SQLite syntax. Use sqlite_master for metadata if needed, CAST(...) for conversions, and avoid information_schema."
+        }
+        crate::database::connection::DatabaseBackend::Oracle => {
+            "Use Oracle SQL syntax. Use DUAL for constant selects, NVL for null coalescing when appropriate, and FETCH FIRST ... ROWS ONLY or ROWNUM for limits depending on the connected version. Avoid information_schema."
+        }
+        crate::database::connection::DatabaseBackend::MSSQL => {
+            "Use SQL Server syntax. Prefer TOP or OFFSET/FETCH for row limits and CAST(...) for explicit type conversion."
+        }
+    }
+}
+
+fn parse_agent_reply(content: &str) -> AgentReply {
+    if let Some(sql) = extract_tag(content, "sql") {
+        return AgentReply::Sql(clean_sql_response(&sql));
+    }
+    if let Some(chat) = extract_tag(content, "chat") {
+        return AgentReply::Chat(chat.trim().to_string());
+    }
+    if let Some(clarify) = extract_tag(content, "clarify") {
+        return AgentReply::Clarify(clarify.trim().to_string());
+    }
+
+    let trimmed = content.trim();
+    if looks_like_sql_response(trimmed) {
+        AgentReply::Sql(clean_sql_response(trimmed))
+    } else {
+        AgentReply::Chat(trimmed.to_string())
+    }
+}
+
+fn extract_tag(content: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let start = content.find(&open)? + open.len();
+    let end = content[start..].find(&close)? + start;
+    Some(content[start..end].trim().to_string())
+}
+
+fn clean_sql_response(content: &str) -> String {
+    content
+        .trim()
+        .trim_matches('`')
+        .trim_start_matches("sql")
+        .trim()
+        .to_string()
+}
+
+fn looks_like_sql_response(content: &str) -> bool {
+    let upper = content.trim().to_uppercase();
+    upper.starts_with("SELECT ")
+        || upper.starts_with("WITH ")
+        || upper.starts_with("INSERT ")
+        || upper.starts_with("UPDATE ")
+        || upper.starts_with("DELETE ")
+        || upper.starts_with("CREATE ")
+        || upper.starts_with("ALTER ")
+        || upper.starts_with("DROP ")
+}
+
+fn clean_agent_summary(content: &str) -> String {
+    if let Some(chat) = extract_tag(content, "chat") {
+        return chat;
+    }
+    if let Some(clarify) = extract_tag(content, "clarify") {
+        return clarify;
+    }
+    content.to_string()
+}
+
+fn truncate_for_prompt(content: &str, max_chars: usize) -> String {
+    if content.chars().count() <= max_chars {
+        return content.to_string();
+    }
+
+    let truncated: String = content.chars().take(max_chars).collect();
+    format!("{}...", truncated)
 }
 
 /// Format an error for display
@@ -866,5 +1116,29 @@ mod tests {
         assert!(is_table_list_request("list all tables"));
         assert!(is_table_list_request("Which tables do I have?"));
         assert!(!is_table_list_request("list all users"));
+    }
+
+    #[test]
+    fn test_parse_agent_reply_sql_tag() {
+        assert_eq!(
+            parse_agent_reply("<sql>SELECT * FROM users</sql>"),
+            AgentReply::Sql("SELECT * FROM users".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_agent_reply_chat_tag() {
+        assert_eq!(
+            parse_agent_reply("<chat>Hello there</chat>"),
+            AgentReply::Chat("Hello there".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_agent_reply_fallback_sql() {
+        assert_eq!(
+            parse_agent_reply("SELECT * FROM users"),
+            AgentReply::Sql("SELECT * FROM users".to_string())
+        );
     }
 }

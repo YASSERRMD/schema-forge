@@ -23,6 +23,8 @@ pub struct DatabaseManager {
     backend: DatabaseBackend,
     /// Schema index (cached database metadata)
     schema_index: Arc<RwLock<SchemaIndex>>,
+    /// Detected database version, if available
+    database_version: Arc<RwLock<Option<String>>>,
     /// Connection URL (for reconnection if needed)
     connection_url: String,
 }
@@ -57,8 +59,10 @@ impl DatabaseManager {
             pool,
             backend,
             schema_index: Arc::new(RwLock::new(SchemaIndex::new())),
+            database_version: Arc::new(RwLock::new(None)),
             connection_url: url.to_string(),
         };
+        let _ = manager.refresh_database_version().await;
 
         Ok(manager)
     }
@@ -79,8 +83,10 @@ impl DatabaseManager {
             pool,
             backend,
             schema_index: Arc::new(RwLock::new(SchemaIndex::new())),
+            database_version: Arc::new(RwLock::new(None)),
             connection_url: url.to_string(),
         };
+        let _ = manager.refresh_database_version().await;
 
         Ok(manager)
     }
@@ -98,6 +104,7 @@ impl DatabaseManager {
             DatabaseBackend::PostgreSQL => self.index_postgresql().await,
             DatabaseBackend::MySQL => self.index_mysql().await,
             DatabaseBackend::SQLite => self.index_sqlite().await,
+            DatabaseBackend::Oracle => self.index_oracle().await,
             DatabaseBackend::MSSQL => self.index_mssql().await,
         }
     }
@@ -145,6 +152,12 @@ impl DatabaseManager {
         index_guard.clone()
     }
 
+    /// Get the detected database version, if available
+    pub async fn database_version(&self) -> Option<String> {
+        let version_guard = self.database_version.read().await;
+        version_guard.clone()
+    }
+
     /// Get the database backend type
     pub fn backend(&self) -> DatabaseBackend {
         self.backend
@@ -165,6 +178,14 @@ impl DatabaseManager {
         self.pool.test_connection().await.is_ok()
     }
 
+    /// Refresh the cached database version information
+    pub async fn refresh_database_version(&self) -> Result<Option<String>> {
+        let version = self.detect_database_version().await?;
+        let mut version_guard = self.database_version.write().await;
+        *version_guard = Some(version.clone());
+        Ok(Some(version))
+    }
+
     /// Execute a SQL query on the database and return formatted results
     pub async fn execute_query(&self, sql: &str) -> Result<Vec<String>> {
         match &self.pool {
@@ -183,6 +204,31 @@ impl DatabaseManager {
                     .map_err(|e| SchemaForgeError::db_query(sql, e))?;
                 Ok(vec![format!("Query executed successfully, {} rows returned", rows.len())])
             }
+            DatabasePool::Oracle(connection) => {
+                if oracle_query_returns_rows(sql) {
+                    let result = connection
+                        .query(sql, &[])
+                        .await
+                        .map_err(|e| SchemaForgeError::db_query_message(sql, e.to_string()))?;
+                    Ok(vec![format!(
+                        "Query executed successfully, {} rows returned",
+                        result.row_count()
+                    )])
+                } else {
+                    let result = connection
+                        .execute(sql, &[])
+                        .await
+                        .map_err(|e| SchemaForgeError::db_query_message(sql, e.to_string()))?;
+                    connection
+                        .commit()
+                        .await
+                        .map_err(|e| SchemaForgeError::db_query_message("COMMIT", e.to_string()))?;
+                    Ok(vec![format!(
+                        "Query executed successfully, {} rows affected",
+                        result.rows_affected
+                    )])
+                }
+            }
         }
     }
 
@@ -198,6 +244,7 @@ impl DatabaseManager {
             DatabasePool::MySql(pool) => {
                 self.execute_mysql_with_results(pool, sql).await
             }
+            DatabasePool::Oracle(connection) => self.execute_oracle_with_results(connection, sql).await,
         }
     }
 
@@ -303,6 +350,53 @@ impl DatabaseManager {
         Ok(format!("{}", table))
     }
 
+    /// Execute Oracle query and format results as table
+    async fn execute_oracle_with_results(
+        &self,
+        connection: &oracle_rs::Connection,
+        sql: &str,
+    ) -> Result<String> {
+        if oracle_query_returns_rows(sql) {
+            let result = connection
+                .query(sql, &[])
+                .await
+                .map_err(|e| SchemaForgeError::db_query_message(sql, e.to_string()))?;
+
+            if result.rows.is_empty() {
+                return Ok("No results found.".to_string());
+            }
+
+            let mut table = Table::new();
+            let columns: Vec<String> = result.columns.iter().map(|column| column.name.clone()).collect();
+            table.set_header(&columns);
+
+            for row in &result.rows {
+                let row_values = row
+                    .values()
+                    .iter()
+                    .map(|value| value.to_string())
+                    .collect::<Vec<_>>();
+                table.add_row(row_values);
+            }
+
+            Ok(format!("{}", table))
+        } else {
+            let result = connection
+                .execute(sql, &[])
+                .await
+                .map_err(|e| SchemaForgeError::db_query_message(sql, e.to_string()))?;
+            connection
+                .commit()
+                .await
+                .map_err(|e| SchemaForgeError::db_query_message("COMMIT", e.to_string()))?;
+
+            Ok(format!(
+                "Query executed successfully, {} rows affected",
+                result.rows_affected
+            ))
+        }
+    }
+
     // Private indexing methods for each database type
 
     /// Index PostgreSQL database schema
@@ -338,12 +432,61 @@ impl DatabaseManager {
         }
     }
 
+    /// Index Oracle database schema
+    async fn index_oracle(&self) -> Result<SchemaIndex> {
+        if let DatabasePool::Oracle(connection) = &self.pool {
+            crate::database::indexer::index_oracle(connection).await
+        } else {
+            Err(SchemaForgeError::InvalidInput(
+                "Not connected to Oracle database".to_string()
+            ))
+        }
+    }
+
     /// Index MSSQL database schema
     async fn index_mssql(&self) -> Result<SchemaIndex> {
         Err(SchemaForgeError::UnsupportedDatabaseType(
             "MSSQL support not yet implemented".to_string()
         ))
     }
+
+    async fn detect_database_version(&self) -> Result<String> {
+        match &self.pool {
+            DatabasePool::Sqlite(pool) => {
+                let row: (String,) = sqlx::query_as("SELECT sqlite_version()")
+                    .fetch_one(pool)
+                    .await?;
+                Ok(format!("SQLite {}", row.0))
+            }
+            DatabasePool::Postgres(pool) => {
+                let row: (String,) = sqlx::query_as("SHOW server_version")
+                    .fetch_one(pool)
+                    .await?;
+                Ok(format!("PostgreSQL {}", row.0))
+            }
+            DatabasePool::MySql(pool) => {
+                let row: (String,) = sqlx::query_as("SELECT VERSION()")
+                    .fetch_one(pool)
+                    .await?;
+                Ok(format!("MySQL {}", row.0))
+            }
+            DatabasePool::Oracle(connection) => {
+                let server_info = connection.server_info().await;
+                if !server_info.version.trim().is_empty() {
+                    Ok(format!("Oracle {}", server_info.version.trim()))
+                } else if !server_info.banner.trim().is_empty() {
+                    Ok(format!("Oracle {}", server_info.banner.trim()))
+                } else {
+                    Ok("Oracle".to_string())
+                }
+            }
+        }
+    }
+}
+
+fn oracle_query_returns_rows(sql: &str) -> bool {
+    let upper = sql.trim_start().to_uppercase();
+    upper.starts_with("SELECT ") || upper.starts_with("WITH ")
 }
 
 #[cfg(test)]
