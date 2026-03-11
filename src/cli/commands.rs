@@ -66,14 +66,18 @@ impl Command {
                     command_type: CommandType::Index,
                 }),
                 "/config" => {
-                    if parts.len() < 3 {
+                    if parts.len() < 3 && !(parts.len() == 2 && parts[1].eq_ignore_ascii_case("ollama")) {
                         return Err(SchemaForgeError::InvalidCommandSyntax {
                             command: cmd.to_string(),
-                            expected: "/config <provider> <api_key>".to_string(),
+                            expected: "/config <provider> <api_key> (or /config ollama)".to_string(),
                         });
                     }
                     let provider = parts[1].to_string();
-                    let key = parts[2].to_string();
+                    let key = if provider.eq_ignore_ascii_case("ollama") && parts.len() < 3 {
+                        "ollama".to_string()
+                    } else {
+                        parts[2].to_string()
+                    };
                     Ok(Command {
                         command_type: CommandType::Config { provider, key },
                     })
@@ -243,20 +247,29 @@ pub async fn handle_command(command: &Command, state: SharedState) -> Result<Str
             ))
         }
         CommandType::Config { provider, key } => {
-            // Store the API key in state
-            let masked_key = if key.len() > 8 {
-                format!("{}...{}", &key[..4], &key[key.len() - 4..])
-            } else {
-                "***".to_string()
-            };
-
             let mut state_guard = state.write().await;
             state_guard.set_api_key(provider.clone(), key.clone());
 
-            Ok(format!(
-                "API key configured for provider: {} ({})",
-                provider, masked_key
-            ))
+            if provider.eq_ignore_ascii_case("ollama") {
+                let model = state_guard
+                    .get_model("ollama")
+                    .unwrap_or_else(|| "llama3.2".to_string());
+                Ok(format!(
+                    "Ollama configured for local server at http://localhost:11434 using model '{}'. Use /model ollama <model> to switch models.",
+                    model
+                ))
+            } else {
+                let masked_key = if key.len() > 8 {
+                    format!("{}...{}", &key[..4], &key[key.len() - 4..])
+                } else {
+                    "***".to_string()
+                };
+
+                Ok(format!(
+                    "API key configured for provider: {} ({})",
+                    provider, masked_key
+                ))
+            }
         }
         CommandType::Providers => {
             let state_guard = state.read().await;
@@ -273,6 +286,11 @@ Anthropic:
 OpenAI:
   Default Model: gpt-4o
   Config: /config openai <api-key>
+
+Ollama:
+  Default Model: llama3.2
+  Config: /config ollama
+  Notes: local server at http://localhost:11434
 
 Groq:
   Default Model: llama-3.3-70b-versatile
@@ -316,13 +334,12 @@ Set a specific model:
 
                     output.push_str(&format!("  {}{}:\n", provider, current));
                     output.push_str(&format!("    Model: {}\n", model));
-                    output.push_str(&format!(
-                        "    API Key: {}***\n\n",
-                        &state_guard
-                            .get_api_key(provider)
-                            .map(|k| &k[..4.min(k.len())])
-                            .unwrap_or("")
-                    ));
+                    if provider.eq_ignore_ascii_case("ollama") {
+                        output.push_str("    Connection: local Ollama at http://localhost:11434\n\n");
+                    } else {
+                        output.push_str(&format!("    API Key: {}***\n\n",
+                            &state_guard.get_api_key(provider).map(|k| &k[..4.min(k.len())]).unwrap_or("")));
+                    }
                 }
 
                 output.push_str("\nUse /model <provider> <model> to change models\n");
@@ -336,8 +353,8 @@ Set a specific model:
             // Validate provider exists
             if !state_guard.api_keys.contains_key(provider) {
                 return Err(SchemaForgeError::InvalidInput(format!(
-                    "Provider '{}' not configured. Use /config {} <api-key> first.",
-                    provider, provider
+                    "Provider '{}' not configured. Use {} first.",
+                    provider, config_hint(provider)
                 )));
             }
 
@@ -356,8 +373,8 @@ Set a specific model:
             // Validate provider exists
             if !state_guard.api_keys.contains_key(provider) {
                 return Err(SchemaForgeError::InvalidInput(format!(
-                    "Provider '{}' not configured. Use /config {} <api-key> first.",
-                    provider, provider
+                    "Provider '{}' not configured. Use {} first.",
+                    provider, config_hint(provider)
                 )));
             }
 
@@ -379,7 +396,8 @@ Database Commands:
   /index             Index the database schema
 
 Configuration:
-  /config <provider> <key>  Set API key for LLM provider
+  /config <provider> <key>  Set API key for a hosted LLM provider
+  /config ollama            Use a local Ollama server at http://localhost:11434
   /providers         List all available LLM providers
   /use <provider>    Switch to a different LLM provider
   /model <provider> <model>  Set model for a provider
@@ -402,6 +420,8 @@ Examples:
   /connect postgresql://localhost/mydb
   /index
   /config anthropic sk-ant-...
+  /config ollama
+  /model ollama llama3.2
   /providers
   /model openai gpt-4
   SELECT * FROM users LIMIT 10
@@ -437,14 +457,8 @@ Examples:
             })?;
 
             // Check if an LLM provider is configured
-            let current_provider = state_guard
-                .get_current_provider()
-                .ok_or_else(|| {
-                    SchemaForgeError::InvalidInput(
-                        "No LLM provider configured. Use /config <provider> <api-key> first."
-                            .to_string(),
-                    )
-                })?
+            let current_provider = state_guard.get_current_provider()
+                .ok_or_else(|| SchemaForgeError::InvalidInput("No LLM provider configured. Use /config ollama for local Ollama or /config <provider> <api-key> for a hosted model.".to_string()))?
                 .clone();
 
             let api_key = state_guard
@@ -513,6 +527,12 @@ fn create_llm_provider(
                 model,
             )))
         }
+        "ollama" => {
+            Ok(Box::new(crate::llm::providers::ollama::OllamaProvider::new(
+                api_key,
+                model,
+            )))
+        }
         "groq" => {
             Ok(Box::new(crate::llm::providers::groq::GroqProvider::new(
                 api_key,
@@ -550,7 +570,7 @@ fn create_llm_provider(
             )))
         }
         _ => Err(SchemaForgeError::InvalidInput(format!(
-            "Unknown provider: '{}'. Supported: anthropic, openai, groq, cohere, xai, minimax, qwen, z.ai",
+            "Unknown provider: '{}'. Supported: anthropic, openai, ollama, groq, cohere, xai, minimax, qwen, z.ai",
             provider
         ))),
     }
@@ -563,6 +583,14 @@ async fn execute_sql_query(
 ) -> Result<String> {
     // Execute the query and return formatted results as a table
     db_manager.execute_query_with_results(sql).await
+}
+
+fn config_hint(provider: &str) -> String {
+    if provider.eq_ignore_ascii_case("ollama") {
+        "/config ollama".to_string()
+    } else {
+        format!("/config {} <api-key>", provider)
+    }
 }
 
 #[cfg(test)]
@@ -594,6 +622,18 @@ mod tests {
             CommandType::Config {
                 provider: "anthropic".to_string(),
                 key: "test-key-123".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ollama_config_command_without_key() {
+        let cmd = Command::parse("/config ollama").unwrap();
+        assert_eq!(
+            cmd.command_type,
+            CommandType::Config {
+                provider: "ollama".to_string(),
+                key: "ollama".to_string()
             }
         );
     }
@@ -665,6 +705,9 @@ mod tests {
 
         let result = Command::parse("/config anthropic");
         assert!(result.is_err());
+
+        let result = Command::parse("/config ollama");
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -689,5 +732,11 @@ mod tests {
     fn test_parse_model_missing_args() {
         let result = Command::parse("/model openai");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_hint_for_ollama() {
+        assert_eq!(config_hint("ollama"), "/config ollama");
+        assert_eq!(config_hint("openai"), "/config openai <api-key>");
     }
 }

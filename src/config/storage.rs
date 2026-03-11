@@ -40,6 +40,7 @@ impl Config {
         // Current as of 2025
         models.insert("anthropic".to_string(), "claude-sonnet-4-20250514".to_string());
         models.insert("openai".to_string(), "gpt-4o".to_string());
+        models.insert("ollama".to_string(), "llama3.2".to_string());
         models.insert("groq".to_string(), "llama-3.3-70b-versatile".to_string());
         models.insert("cohere".to_string(), "command-r-plus".to_string());
         models.insert("xai".to_string(), "grok-2".to_string());
@@ -168,6 +169,7 @@ mod tests {
         assert!(!config.models.is_empty());
         assert!(config.models.contains_key("anthropic"));
         assert!(config.models.contains_key("openai"));
+        assert!(config.models.contains_key("ollama"));
     }
 
     #[test]

@@ -120,6 +120,13 @@ async fn test_llm_provider_creation() {
     );
     assert_eq!(openai.provider_name(), "OpenAI");
     assert!(openai.has_api_key());
+
+    let ollama = schema_forge::llm::providers::ollama::OllamaProvider::new(
+        "ollama",
+        None,
+    );
+    assert_eq!(ollama.provider_name(), "Ollama");
+    assert!(ollama.has_api_key());
 }
 
 #[tokio::test]
