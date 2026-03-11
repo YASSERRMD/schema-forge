@@ -1,7 +1,7 @@
 //! Persistent terminal UI for Schema-Forge.
 //!
-//! Keeps the logo pinned at the top while command output scrolls in a
-//! dedicated transcript area, with a composer fixed to the bottom.
+//! Keeps a pinned top header, a chat-first transcript, and a fixed composer
+//! so the interface behaves like an agent shell instead of a scrolling REPL.
 
 use crate::cli::command_menu;
 use crate::cli::commands::{self, Command, CommandType, format_error};
@@ -17,28 +17,26 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Margin, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, ListState, Paragraph, Wrap},
 };
 use std::{io, time::Duration};
 
-const HEADER_LOGO: [&str; 7] = [
-    "      .-.",
-    "     ( * )",
-    "      `-'",
-    "   .--------.",
-    " .'  .----.  '.",
-    "|   | []  |   |",
-    " '-.______.-'",
+const HEADER_LOGO: [&str; 5] = [
+    "    ╭────╮",
+    "  ╭─┤ ◉  ├─╮",
+    "╭─┴─┤╭──╮├─┴─╮",
+    "│   │╰──╯│   │",
+    "╰───┴────┴───╯",
 ];
 
 #[derive(Clone, Copy)]
 enum TranscriptKind {
-    System,
+    Assistant,
     User,
-    Success,
+    System,
     Error,
 }
 
@@ -57,12 +55,12 @@ impl TranscriptEntry {
         }
     }
 
-    fn style(&self) -> Style {
+    fn accent(&self) -> Color {
         match self.kind {
-            TranscriptKind::System => Style::default().fg(Color::Cyan),
-            TranscriptKind::User => Style::default().fg(Color::Yellow),
-            TranscriptKind::Success => Style::default().fg(Color::Green),
-            TranscriptKind::Error => Style::default().fg(Color::Red),
+            TranscriptKind::Assistant => Color::Cyan,
+            TranscriptKind::User => Color::Green,
+            TranscriptKind::System => Color::DarkGray,
+            TranscriptKind::Error => Color::Red,
         }
     }
 }
@@ -70,7 +68,11 @@ impl TranscriptEntry {
 #[derive(Default)]
 struct StatusSnapshot {
     connected: bool,
+    database_backend: Option<String>,
+    database_version: Option<String>,
+    indexed_tables: usize,
     current_provider: Option<String>,
+    current_model: Option<String>,
     configured_providers: usize,
 }
 
@@ -92,24 +94,11 @@ pub struct TuiApp {
 
 impl TuiApp {
     pub fn new(state: SharedState) -> Self {
-        let transcript = vec![
-            TranscriptEntry::new(
-                TranscriptKind::System,
-                "Schema-Forge",
-                format!("Intelligent Database Query Agent v{}", env!("CARGO_PKG_VERSION")),
-            ),
-            TranscriptEntry::new(
-                TranscriptKind::System,
-                "Hint",
-                "Use slash commands like /connect or /help, or type a natural language query.",
-            ),
-        ];
-
         Self {
             state,
             input: String::new(),
             cursor: 0,
-            transcript,
+            transcript: Self::welcome_transcript(None),
             command_state: ListState::default().with_selected(Some(0)),
             history: Vec::new(),
             history_index: None,
@@ -259,12 +248,10 @@ impl TuiApp {
         self.record_history(&submitted);
 
         if submitted == "/clear" {
-            self.transcript.clear();
-            self.push_entry(
-                TranscriptKind::System,
-                "Schema-Forge",
-                "Transcript cleared. The header stays pinned while new output scrolls below it.",
-            );
+            self.transcript = Self::welcome_transcript(Some(
+                "Session reset. The pinned header stays in place and the conversation starts fresh.",
+            ));
+            self.follow_output = true;
             return Ok(());
         }
 
@@ -276,7 +263,7 @@ impl TuiApp {
 
                 match commands::handle_command(&command, self.state.clone()).await {
                     Ok(message) => {
-                        self.push_entry(TranscriptKind::Success, "Schema-Forge", message);
+                        self.push_entry(TranscriptKind::Assistant, "Schema-Forge", message);
                         if is_quit {
                             self.should_quit = true;
                         }
@@ -298,22 +285,38 @@ impl TuiApp {
         let state = self.state.read().await;
         self.status.connected = state.is_connected();
         self.status.current_provider = state.get_current_provider().cloned();
+        self.status.current_model = self
+            .status
+            .current_provider
+            .as_ref()
+            .and_then(|provider| state.get_model(provider));
         self.status.configured_providers = state.list_providers().len();
+
+        if let Some(db_manager) = state.database_manager.as_ref() {
+            self.status.database_backend = Some(db_manager.backend().to_string());
+            self.status.database_version = db_manager.database_version().await;
+            self.status.indexed_tables = db_manager.get_schema_index().await.tables.len();
+        } else {
+            self.status.database_backend = None;
+            self.status.database_version = None;
+            self.status.indexed_tables = 0;
+        }
     }
 
     fn render(&mut self, frame: &mut Frame) {
         let area = frame.area();
+        let composer_height = if self.should_show_command_palette() { 5 } else { 4 };
         let sections = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(10),
-                Constraint::Min(8),
-                Constraint::Length(4),
+                Constraint::Length(8),
+                Constraint::Min(10),
+                Constraint::Length(composer_height),
             ])
             .split(area);
 
         self.render_header(frame, sections[0]);
-        self.render_transcript(frame, sections[1]);
+        self.render_body(frame, sections[1]);
         self.render_input(frame, sections[2]);
 
         if self.should_show_command_palette() {
@@ -329,21 +332,10 @@ impl TuiApp {
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
-        let status_provider = self
-            .status
-            .current_provider
-            .as_deref()
-            .unwrap_or("none configured");
-        let status_database = if self.status.connected {
-            "database connected"
-        } else {
-            "database not connected"
-        };
-
         let header_block = Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(" Schema-Forge ");
+            .border_style(Style::default().fg(Color::Gray))
+            .title(" Agent Shell ");
         frame.render_widget(header_block, area);
 
         let inner = area.inner(Margin {
@@ -352,7 +344,7 @@ impl TuiApp {
         });
         let sections = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(18), Constraint::Min(24)])
+            .constraints([Constraint::Length(18), Constraint::Min(30)])
             .split(inner);
 
         let logo = Paragraph::new(
@@ -368,53 +360,55 @@ impl TuiApp {
                 })
                 .collect::<Vec<_>>(),
         )
-        .alignment(ratatui::layout::Alignment::Center)
+        .alignment(Alignment::Center)
         .wrap(Wrap { trim: false });
         frame.render_widget(logo, sections[0]);
 
-        let mut info_lines = vec![
+        let mut detail_lines = vec![
+            Line::from(vec![
+                Span::styled(
+                    "Schema-Forge",
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "chat-first SQL agent",
+                    Style::default().fg(Color::Gray),
+                ),
+            ]),
+            self.status_pills(),
             Line::from(Span::styled(
-                "Schema-Forge",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                "SQL agent for indexed live databases",
+                self.header_summary(),
                 Style::default().fg(Color::Gray),
             )),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Provider: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    status_provider.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("State: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    status_database.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled("  |  ", Style::default().fg(Color::DarkGray)),
-                Span::styled("Providers: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    self.status.configured_providers.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-                ),
-            ]),
         ];
 
         if self.busy {
-            info_lines.push(Line::from(Span::styled(
-                "Working...",
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            detail_lines.push(Line::from(Span::styled(
+                "Thinking through the next step...",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
             )));
         }
 
-        let summary = Paragraph::new(info_lines).wrap(Wrap { trim: false });
+        let summary = Paragraph::new(detail_lines).wrap(Wrap { trim: false });
         frame.render_widget(summary, sections[1]);
+    }
+
+    fn render_body(&mut self, frame: &mut Frame, area: Rect) {
+        if area.width >= 110 {
+            let sections = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Min(56), Constraint::Length(32)])
+                .split(area);
+            self.render_transcript(frame, sections[0]);
+            self.render_sidebar(frame, sections[1]);
+        } else {
+            self.render_transcript(frame, area);
+        }
     }
 
     fn render_transcript(&mut self, frame: &mut Frame, area: Rect) {
@@ -433,8 +427,8 @@ impl TuiApp {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Blue))
-                    .title(" Activity "),
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(" Conversation "),
             )
             .scroll((self.scroll, 0))
             .wrap(Wrap { trim: false });
@@ -442,13 +436,40 @@ impl TuiApp {
         frame.render_widget(transcript, area);
     }
 
+    fn render_sidebar(&self, frame: &mut Frame, area: Rect) {
+        let sections = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(8), Constraint::Min(10)])
+            .split(area);
+
+        let context = Paragraph::new(self.context_lines())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(" Context "),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(context, sections[0]);
+
+        let prompts = Paragraph::new(self.example_lines())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(" Quick Start "),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(prompts, sections[1]);
+    }
+
     fn render_input(&self, frame: &mut Frame, area: Rect) {
-        let prompt = "> ";
+        let prompt = "› ";
         let input_text = if self.input.is_empty() {
             Text::from(Line::from(vec![
                 Span::styled(prompt, Style::default().fg(Color::Green)),
                 Span::styled(
-                    "Type a query or slash command",
+                    "Ask about data, run SQL, or type / for commands",
                     Style::default().fg(Color::DarkGray),
                 ),
             ]))
@@ -464,7 +485,7 @@ impl TuiApp {
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Green))
-                    .title(" Composer ")
+                    .title(" Ask ")
                     .title_bottom(Line::from(self.composer_hint())),
             )
             .wrap(Wrap { trim: false });
@@ -482,25 +503,64 @@ impl TuiApp {
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
-        if self.transcript.is_empty() {
-            return vec![Line::from(Span::styled(
-                "No activity yet.",
-                Style::default().fg(Color::DarkGray),
-            ))];
-        }
-
         let mut lines = Vec::new();
+
         for entry in &self.transcript {
-            lines.push(Line::from(Span::styled(
-                format!("{}:", entry.title),
-                entry.style().add_modifier(Modifier::BOLD),
-            )));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "● ",
+                    Style::default()
+                        .fg(entry.accent())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    entry.title,
+                    Style::default()
+                        .fg(entry.accent())
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
 
             for line in entry.body.lines() {
-                lines.push(Line::from(Span::raw(format!("  {}", line))));
+                lines.push(Line::from(vec![
+                    Span::styled("│ ", Style::default().fg(entry.accent())),
+                    Span::raw(line.to_string()),
+                ]));
             }
 
             lines.push(Line::from(""));
+        }
+
+        if self.busy {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "● ",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "Schema-Forge",
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    "Working through the request...",
+                    Style::default().fg(Color::Gray),
+                ),
+            ]));
+            lines.push(Line::from(""));
+        }
+
+        if lines.is_empty() {
+            lines.push(Line::from(Span::styled(
+                "No activity yet.",
+                Style::default().fg(Color::DarkGray),
+            )));
         }
 
         lines
@@ -520,7 +580,7 @@ impl TuiApp {
         if self.should_show_command_palette() {
             "Enter select  |  Tab insert  |  Up/Down navigate  |  Esc clear"
         } else {
-            "Enter submit  |  Up/Down history  |  Ctrl+C quit  |  PgUp/PgDn scroll"
+            "Enter send  |  Up/Down history  |  Ctrl+C quit  |  PgUp/PgDn scroll"
         }
     }
 
@@ -684,6 +744,196 @@ impl TuiApp {
             self.cursor += current.len_utf8();
         }
     }
+
+    fn header_summary(&self) -> String {
+        if self.status.connected {
+            match (
+                self.status.database_backend.as_deref(),
+                self.status.database_version.as_deref(),
+            ) {
+                (Some(backend), Some(version)) => format!(
+                    "Connected to {backend} ({version}). {} indexed tables cached.",
+                    self.status.indexed_tables
+                ),
+                (Some(backend), None) => format!(
+                    "Connected to {backend}. {} indexed tables cached.",
+                    self.status.indexed_tables
+                ),
+                _ => "Connected to a database. Schema indexing runs automatically on connect."
+                    .to_string(),
+            }
+        } else {
+            "Connect a database, index the schema immediately, and then ask in plain English."
+                .to_string()
+        }
+    }
+
+    fn status_pills(&self) -> Line<'static> {
+        let mut spans = vec![status_pill(
+            if self.status.connected {
+                "database ready"
+            } else {
+                "awaiting database"
+            },
+            if self.status.connected {
+                Color::Green
+            } else {
+                Color::Yellow
+            },
+        )];
+
+        spans.push(Span::raw(" "));
+        spans.push(status_pill(
+            self.status
+                .database_backend
+                .as_deref()
+                .unwrap_or("no dialect"),
+            Color::Cyan,
+        ));
+
+        spans.push(Span::raw(" "));
+        spans.push(status_pill(
+            self.status
+                .current_provider
+                .as_deref()
+                .unwrap_or("no provider"),
+            if self.status.current_provider.is_some() {
+                Color::Green
+            } else {
+                Color::Yellow
+            },
+        ));
+
+        if let Some(model) = self.status.current_model.as_deref() {
+            spans.push(Span::raw(" "));
+            spans.push(status_pill(model, Color::White));
+        }
+
+        if self.busy {
+            spans.push(Span::raw(" "));
+            spans.push(status_pill("thinking", Color::Yellow));
+        }
+
+        Line::from(spans)
+    }
+
+    fn context_lines(&self) -> Vec<Line<'static>> {
+        let database = if self.status.connected {
+            self.status
+                .database_backend
+                .clone()
+                .unwrap_or_else(|| "connected".to_string())
+        } else {
+            "disconnected".to_string()
+        };
+        let version = self
+            .status
+            .database_version
+            .clone()
+            .unwrap_or_else(|| "not detected".to_string());
+        let provider = self
+            .status
+            .current_provider
+            .clone()
+            .unwrap_or_else(|| "not configured".to_string());
+        let model = self
+            .status
+            .current_model
+            .clone()
+            .unwrap_or_else(|| "default".to_string());
+        let index_status = if self.status.connected {
+            format!("{} tables cached", self.status.indexed_tables)
+        } else {
+            "runs on /connect".to_string()
+        };
+
+        vec![
+            info_line("Database", &database),
+            info_line("Version", &version),
+            info_line("Provider", &provider),
+            info_line("Model", &model),
+            info_line("Indexing", &index_status),
+            info_line(
+                "Providers",
+                &self.status.configured_providers.to_string(),
+            ),
+        ]
+    }
+
+    fn example_lines(&self) -> Vec<Line<'static>> {
+        if !self.status.connected {
+            return vec![
+                example_line("/connect sqlite:///Users/.../schema_forge_demo.db"),
+                example_line("/connect oracle://user:password@host:1521/SERVICE"),
+                example_line("/config ollama"),
+                example_line("Ask: show me all tables"),
+            ];
+        }
+
+        if self.status.current_provider.is_none() {
+            return vec![
+                example_line("/config ollama"),
+                example_line("/model ollama llama3.2"),
+                example_line("Ask: list all tables"),
+                example_line("Ask: show the newest 10 rows"),
+            ];
+        }
+
+        vec![
+            example_line("Ask: show top customers by revenue"),
+            example_line("Ask: which tables store payments"),
+            example_line("Ask: find failed orders from today"),
+            example_line("/index to refresh the schema cache"),
+        ]
+    }
+
+    fn welcome_transcript(note: Option<&str>) -> Vec<TranscriptEntry> {
+        let mut transcript = vec![TranscriptEntry::new(
+            TranscriptKind::Assistant,
+            "Schema-Forge",
+            "Hello. I work like a database agent: connect a live database, index it immediately, and then ask in plain English or run SQL directly.",
+        )];
+
+        if let Some(note) = note {
+            transcript.push(TranscriptEntry::new(
+                TranscriptKind::System,
+                "Session",
+                note,
+            ));
+        }
+
+        transcript.push(TranscriptEntry::new(
+            TranscriptKind::System,
+            "Quick start",
+            "/connect sqlite:///... or /connect oracle://user:password@host:1521/SERVICE_NAME\n/config ollama\nAsk: show me active users or type raw SQL directly",
+        ));
+
+        transcript
+    }
+}
+
+fn status_pill(label: &str, color: Color) -> Span<'static> {
+    Span::styled(
+        format!("[{}]", label),
+        Style::default().fg(color).add_modifier(Modifier::BOLD),
+    )
+}
+
+fn info_line(label: &str, value: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{label:<9}"),
+            Style::default().fg(Color::Gray),
+        ),
+        Span::styled(value.to_string(), Style::default().fg(Color::White)),
+    ])
+}
+
+fn example_line(text: &str) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("• ", Style::default().fg(Color::Cyan)),
+        Span::raw(text.to_string()),
+    ])
 }
 
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
