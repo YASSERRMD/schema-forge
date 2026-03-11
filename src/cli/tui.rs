@@ -24,13 +24,14 @@ use ratatui::{
 };
 use std::{io, time::Duration};
 
-const HEADER_ART: [&str; 6] = [
-    " ██████╗ ██████╗ ███╗   ██╗████████╗    ██╗  ██╗██╗   ██╗██████╗ ",
-    " ██╔════╝██╔═══██╗████╗  ██║╚══██╔══╝    ██║  ██║██║   ██║██╔══██╗",
-    " ██║     ██║   ██║██╔██╗ ██║   ██║       ███████║██║   ██║██████╔╝",
-    " ██║     ██║   ██║██║╚██╗██║   ██║       ██╔══██║██║   ██║██╔══██╗",
-    " ╚██████╗╚██████╔╝██║ ╚████║   ██║       ██║  ██║╚██████╔╝██████╔╝",
-    "  ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝   ╚═╝       ╚═╝  ╚═╝ ╚═════╝ ╚═════╝ ",
+const HEADER_LOGO: [&str; 7] = [
+    "      .-.",
+    "     ( * )",
+    "      `-'",
+    "   .--------.",
+    " .'  .----.  '.",
+    "|   | []  |   |",
+    " '-.______.-'",
 ];
 
 #[derive(Clone, Copy)]
@@ -339,53 +340,81 @@ impl TuiApp {
             "database not connected"
         };
 
-        let mut lines = HEADER_ART
-            .iter()
-            .map(|line| {
-                Line::from(Span::styled(
-                    (*line).to_string(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ))
-            })
-            .collect::<Vec<_>>();
+        let header_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Schema-Forge ");
+        frame.render_widget(header_block, area);
 
-        lines.push(Line::from(""));
-        lines.push(Line::from(vec![
-            Span::styled("Provider: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                status_provider.to_string(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  |  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("State: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                status_database.to_string(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled("  |  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("Providers: ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                self.status.configured_providers.to_string(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                if self.busy { "  |  working..." } else { "" },
-                Style::default().fg(Color::Yellow),
-            ),
-        ]));
+        let inner = area.inner(Margin {
+            vertical: 1,
+            horizontal: 1,
+        });
+        let sections = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(18), Constraint::Min(24)])
+            .split(inner);
 
-        let header = Paragraph::new(lines)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
-                    .title(" Schema-Forge "),
-            )
-            .wrap(Wrap { trim: false });
+        let logo = Paragraph::new(
+            HEADER_LOGO
+                .iter()
+                .map(|line| {
+                    Line::from(Span::styled(
+                        (*line).to_string(),
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                })
+                .collect::<Vec<_>>(),
+        )
+        .alignment(ratatui::layout::Alignment::Center)
+        .wrap(Wrap { trim: false });
+        frame.render_widget(logo, sections[0]);
 
-        frame.render_widget(header, area);
+        let mut info_lines = vec![
+            Line::from(Span::styled(
+                "Schema-Forge",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                "SQL agent for indexed live databases",
+                Style::default().fg(Color::Gray),
+            )),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Provider: ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    status_provider.to_string(),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("State: ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    status_database.to_string(),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled("  |  ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Providers: ", Style::default().fg(Color::Gray)),
+                Span::styled(
+                    self.status.configured_providers.to_string(),
+                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+        ];
+
+        if self.busy {
+            info_lines.push(Line::from(Span::styled(
+                "Working...",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )));
+        }
+
+        let summary = Paragraph::new(info_lines).wrap(Wrap { trim: false });
+        frame.render_widget(summary, sections[1]);
     }
 
     fn render_transcript(&mut self, frame: &mut Frame, area: Rect) {

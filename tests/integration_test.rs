@@ -152,6 +152,55 @@ async fn test_sqlite_command_flow() {
     assert!(sql_output.contains("Charlie"));
 }
 
+#[tokio::test]
+async fn test_index_updates_cached_schema() {
+    use schema_forge::config::create_shared_state;
+
+    let database = TestSqliteDatabase::new("schema-cache").await;
+    let state = create_shared_state();
+
+    let connect = Command::parse(&format!("/connect {}", database.url)).unwrap();
+    commands::handle_command(&connect, state.clone()).await.unwrap();
+
+    let index = Command::parse("/index").unwrap();
+    commands::handle_command(&index, state.clone()).await.unwrap();
+
+    let state_guard = state.read().await;
+    let db_manager = state_guard.database_manager.as_ref().unwrap();
+    let schema_index = db_manager.get_schema_index().await;
+
+    assert_eq!(schema_index.table_names(), vec!["users"]);
+}
+
+#[tokio::test]
+async fn test_greeting_query_returns_conversational_response() {
+    use schema_forge::config::create_shared_state;
+
+    let state = create_shared_state();
+    let greeting = Command::parse("hi").unwrap();
+    let output = commands::handle_command(&greeting, state).await.unwrap();
+
+    assert!(output.contains("Hello."));
+    assert!(output.contains("/connect <url>"));
+}
+
+#[tokio::test]
+async fn test_list_tables_query_uses_sqlite_schema_without_llm() {
+    use schema_forge::config::create_shared_state;
+
+    let database = TestSqliteDatabase::new("list-tables").await;
+    let state = create_shared_state();
+
+    let connect = Command::parse(&format!("/connect {}", database.url)).unwrap();
+    commands::handle_command(&connect, state.clone()).await.unwrap();
+
+    let list_tables = Command::parse("list all tables").unwrap();
+    let output = commands::handle_command(&list_tables, state).await.unwrap();
+
+    assert!(output.contains("SQLite schema:"));
+    assert!(output.contains("users"));
+}
+
 struct TestSqliteDatabase {
     path: PathBuf,
     url: String,
