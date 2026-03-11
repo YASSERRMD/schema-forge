@@ -543,7 +543,8 @@ Examples:
                     provider: current_provider.clone(),
                     message: format!("Agent planning failed: {}", e),
                     status: 0,
-                })?;
+                }
+            })?;
 
             let reply = match agent_reply {
                 AgentReply::Chat(message) | AgentReply::Clarify(message) => message,
