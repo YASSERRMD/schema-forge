@@ -3,6 +3,7 @@
 //! Keeps the logo pinned at the top while command output scrolls in a
 //! dedicated transcript area, with a composer fixed to the bottom.
 
+use crate::cli::command_menu;
 use crate::cli::commands::{self, Command, CommandType, format_error};
 use crate::config::SharedState;
 use crate::error::Result;
@@ -19,7 +20,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, ListState, Paragraph, Wrap},
 };
 use std::{io, time::Duration};
 
@@ -77,6 +78,10 @@ pub struct TuiApp {
     input: String,
     cursor: usize,
     transcript: Vec<TranscriptEntry>,
+    command_state: ListState,
+    history: Vec<String>,
+    history_index: Option<usize>,
+    history_draft: String,
     scroll: u16,
     follow_output: bool,
     should_quit: bool,
@@ -104,6 +109,10 @@ impl TuiApp {
             input: String::new(),
             cursor: 0,
             transcript,
+            command_state: ListState::default().with_selected(Some(0)),
+            history: Vec::new(),
+            history_index: None,
+            history_draft: String::new(),
             scroll: 0,
             follow_output: true,
             should_quit: false,
@@ -160,13 +169,41 @@ impl TuiApp {
                 self.should_quit = true;
                 false
             }
-            KeyCode::Enter => !self.input.trim().is_empty(),
+            KeyCode::Enter => {
+                if self.should_show_command_palette() {
+                    self.apply_selected_command()
+                } else {
+                    !self.input.trim().is_empty()
+                }
+            }
             KeyCode::Esc => {
                 self.clear_input();
                 false
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.clear_input();
+                false
+            }
+            KeyCode::Up => {
+                if self.should_show_command_palette() {
+                    self.select_previous_command();
+                } else {
+                    self.history_previous();
+                }
+                false
+            }
+            KeyCode::Down => {
+                if self.should_show_command_palette() {
+                    self.select_next_command();
+                } else {
+                    self.history_next();
+                }
+                false
+            }
+            KeyCode::Tab => {
+                if self.should_show_command_palette() {
+                    let _ = self.accept_selected_command(false);
+                }
                 false
             }
             KeyCode::Char(ch) => {
@@ -217,6 +254,8 @@ impl TuiApp {
         if submitted.is_empty() {
             return Ok(());
         }
+
+        self.record_history(&submitted);
 
         if submitted == "/clear" {
             self.transcript.clear();
@@ -275,6 +314,17 @@ impl TuiApp {
         self.render_header(frame, sections[0]);
         self.render_transcript(frame, sections[1]);
         self.render_input(frame, sections[2]);
+
+        if self.should_show_command_palette() {
+            let commands = command_menu::filtered_commands(&self.input);
+            self.sync_command_selection(commands.len());
+            command_menu::render_command_palette(
+                frame,
+                sections[1],
+                &commands,
+                &mut self.command_state,
+            );
+        }
     }
 
     fn render_header(&self, frame: &mut Frame, area: Rect) {
@@ -386,9 +436,7 @@ impl TuiApp {
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Green))
                     .title(" Composer ")
-                    .title_bottom(Line::from(
-                        "Enter submit  |  Esc clear  |  Ctrl+C quit  |  PgUp/PgDn scroll",
-                    )),
+                    .title_bottom(Line::from(self.composer_hint())),
             )
             .wrap(Wrap { trim: false });
 
@@ -434,14 +482,129 @@ impl TuiApp {
         self.follow_output = true;
     }
 
+    fn should_show_command_palette(&self) -> bool {
+        let trimmed = self.input.trim_start();
+        trimmed.starts_with('/') && !trimmed.contains(' ')
+    }
+
+    fn composer_hint(&self) -> &'static str {
+        if self.should_show_command_palette() {
+            "Enter select  |  Tab insert  |  Up/Down navigate  |  Esc clear"
+        } else {
+            "Enter submit  |  Up/Down history  |  Ctrl+C quit  |  PgUp/PgDn scroll"
+        }
+    }
+
+    fn sync_command_selection(&mut self, command_count: usize) {
+        if command_count == 0 {
+            self.command_state.select(None);
+            return;
+        }
+
+        let selected = self.command_state.selected().unwrap_or(0).min(command_count - 1);
+        self.command_state.select(Some(selected));
+    }
+
+    fn apply_selected_command(&mut self) -> bool {
+        self.accept_selected_command(true)
+    }
+
+    fn accept_selected_command(&mut self, submit_when_complete: bool) -> bool {
+        let commands = command_menu::filtered_commands(&self.input);
+        let Some(selected) = self.command_state.selected() else {
+            return false;
+        };
+        let Some(command) = commands.get(selected) else {
+            return false;
+        };
+
+        self.set_input(command_menu::apply_command(command));
+        submit_when_complete && !command.requires_arguments
+    }
+
+    fn select_previous_command(&mut self) {
+        let commands = command_menu::filtered_commands(&self.input);
+        if commands.is_empty() {
+            self.command_state.select(None);
+            return;
+        }
+
+        let selected = self.command_state.selected().unwrap_or(0).saturating_sub(1);
+        self.command_state.select(Some(selected));
+    }
+
+    fn select_next_command(&mut self) {
+        let commands = command_menu::filtered_commands(&self.input);
+        if commands.is_empty() {
+            self.command_state.select(None);
+            return;
+        }
+
+        let selected = self.command_state.selected().unwrap_or(0);
+        let next = (selected + 1).min(commands.len() - 1);
+        self.command_state.select(Some(next));
+    }
+
     fn clear_input(&mut self) {
-        self.input.clear();
-        self.cursor = 0;
+        self.history_index = None;
+        self.history_draft.clear();
+        self.set_input(String::new());
+    }
+
+    fn set_input(&mut self, input: String) {
+        self.input = input;
+        self.cursor = self.input.len();
+        let command_count = command_menu::filtered_commands(&self.input).len();
+        self.sync_command_selection(command_count);
+    }
+
+    fn history_previous(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+
+        if self.history_index.is_none() {
+            self.history_draft = self.input.clone();
+        }
+
+        let next_index = match self.history_index {
+            Some(index) => index.saturating_sub(1),
+            None => self.history.len() - 1,
+        };
+
+        self.history_index = Some(next_index);
+        self.set_input(self.history[next_index].clone());
+    }
+
+    fn history_next(&mut self) {
+        let Some(index) = self.history_index else {
+            return;
+        };
+
+        if index + 1 < self.history.len() {
+            let next_index = index + 1;
+            self.history_index = Some(next_index);
+            self.set_input(self.history[next_index].clone());
+        } else {
+            self.history_index = None;
+            self.set_input(self.history_draft.clone());
+        }
+    }
+
+    fn record_history(&mut self, submitted: &str) {
+        if self.history.last().map(|entry| entry.as_str()) != Some(submitted) {
+            self.history.push(submitted.to_string());
+        }
+        self.history_index = None;
+        self.history_draft.clear();
     }
 
     fn insert_char(&mut self, ch: char) {
         self.input.insert(self.cursor, ch);
         self.cursor += ch.len_utf8();
+        self.history_index = None;
+        let command_count = command_menu::filtered_commands(&self.input).len();
+        self.sync_command_selection(command_count);
     }
 
     fn delete_previous_char(&mut self) {
@@ -454,6 +617,9 @@ impl TuiApp {
             self.input.drain(start..self.cursor);
             self.cursor = start;
         }
+        self.history_index = None;
+        let command_count = command_menu::filtered_commands(&self.input).len();
+        self.sync_command_selection(command_count);
     }
 
     fn delete_current_char(&mut self) {
@@ -465,6 +631,9 @@ impl TuiApp {
             let end = self.cursor + current.len_utf8();
             self.input.drain(self.cursor..end);
         }
+        self.history_index = None;
+        let command_count = command_menu::filtered_commands(&self.input).len();
+        self.sync_command_selection(command_count);
     }
 
     fn move_cursor_left(&mut self) {
