@@ -5,7 +5,7 @@ An intelligent CLI-based database agent that provides an interactive REPL for qu
 ## Features
 
 - **Multi-Database Support**: PostgreSQL, MySQL, SQLite, MSSQL
-- **8 LLM Providers**: Anthropic Claude, OpenAI GPT, Groq, Cohere, xAI, Minimax, Qwen, z.ai
+- **9 LLM Providers**: Anthropic Claude, OpenAI GPT, Ollama, Groq, Cohere, xAI, Minimax, Qwen, z.ai
 - **Natural Language Queries**: Ask questions in plain English, get SQL results
 - **Automatic Schema Indexing**: Introspects and understands your database structure
 - **Interactive REPL**: rustyline-powered CLI with command history and tab completion
@@ -18,7 +18,7 @@ An intelligent CLI-based database agent that provides an interactive REPL for qu
 
 - Rust 1.70+ and Cargo
 - A database (PostgreSQL, MySQL, SQLite, or MSSQL)
-- API key for your preferred LLM provider
+- API key for your preferred hosted LLM provider, or a local Ollama installation
 
 #### System Dependencies
 
@@ -104,6 +104,9 @@ cargo run --release
 # Set your LLM provider
 > /config anthropic sk-ant-your-key-here
 
+# Or use local Ollama
+> /config ollama
+
 # Ask a question in natural language
 > Show me all users who signed up in the last 30 days
 
@@ -124,7 +127,8 @@ cargo run --release
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/config <provider> <key>` | Set API key for LLM provider | `/config openai sk-...` |
+| `/config <provider> <key>` | Set API key for a hosted LLM provider | `/config openai sk-...` |
+| `/config ollama` | Use a local Ollama server | `/config ollama` |
 
 ### Session Commands
 
@@ -171,6 +175,23 @@ Models: `claude-3-5-sonnet-20241022` (default), `claude-3-opus`
 /config openai sk-your-api-key-here
 ```
 Models: `gpt-4o-mini` (default), `gpt-4`, `gpt-3.5-turbo`
+
+### Ollama (Local)
+```bash
+/config ollama
+/model ollama llama3.2
+```
+Default endpoint: `http://localhost:11434`
+
+If you want to use a model you already have locally, check:
+```bash
+ollama list
+```
+
+If you need a model first, pull one:
+```bash
+ollama pull llama3.2
+```
 
 ### Groq (Llama)
 ```bash
@@ -221,6 +242,26 @@ Models: `z-pro-v1` (default), `z-ultra-v2`
 
 > Find the top 10 customers by revenue
 [Returns ranked results]
+```
+
+### Local Ollama Workflow
+
+```bash
+# Start Ollama if it is not already running
+ollama serve
+
+# In another terminal, run Schema-Forge
+cargo run
+```
+
+Then inside Schema-Forge:
+
+```text
+/connect sqlite:///absolute/path/to/database.db
+/index
+/config ollama
+/model ollama llama3.2
+Show me all active users created this month
 ```
 
 ### Get SQL Only
@@ -304,6 +345,16 @@ If you get API errors:
      -d '{"model": "claude-3-5-sonnet-20241022", "max_tokens": 10, "messages": [{"role": "user", "content": "Hi"}]}'
    ```
 
+### Ollama Errors
+
+If local Ollama queries fail:
+
+1. Start the local daemon: `ollama serve`
+2. Check installed models: `ollama list`
+3. Pull a model if needed: `ollama pull llama3.2`
+4. If you want a non-default local model, set it explicitly:
+   `/model ollama your-model-name`
+
 ## Architecture
 
 Schema-Forge is built with a modular architecture:
@@ -383,7 +434,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Acknowledgments
 
 - Built with [Rust](https://www.rust-lang.org/)
-- LLM integration powered by [Anthropic](https://www.anthropic.com/), [OpenAI](https://openai.com/), [Groq](https://groq.com/), [Cohere](https://cohere.com/), [xAI](https://x.ai/), [Minimax](https://www.minimaxi.com/), [Alibaba Qwen](https://tongyi.aliyun.com/), and [z.ai](https://z.ai/)
+- LLM integration powered by [Anthropic](https://www.anthropic.com/), [OpenAI](https://openai.com/), [Ollama](https://ollama.com/), [Groq](https://groq.com/), [Cohere](https://cohere.com/), [xAI](https://x.ai/), [Minimax](https://www.minimaxi.com/), [Alibaba Qwen](https://tongyi.aliyun.com/), and [z.ai](https://z.ai/)
 - Database access via [sqlx](https://github.com/launchbadge/sqlx) and [tiberius](https://github.com/prisma/tiberius)
 - CLI powered by [rustyline](https://github.com/kkawakam/rustyline)
 

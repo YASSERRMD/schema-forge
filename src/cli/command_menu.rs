@@ -32,8 +32,8 @@ pub fn command_items() -> Vec<CommandItem> {
         },
         CommandItem {
             name: "/config",
-            description: "Set an API key for an LLM provider",
-            example: "/config anthropic sk-ant-...",
+            description: "Configure a hosted LLM or local Ollama",
+            example: "/config ollama",
             requires_arguments: true,
         },
         CommandItem {
