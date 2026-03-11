@@ -6,6 +6,7 @@
 pub mod command_menu;
 pub mod commands;
 pub mod repl;
+pub mod tui;
 
 // Re-exports
 pub use repl::Repl;
