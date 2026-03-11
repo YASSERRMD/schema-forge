@@ -235,8 +235,8 @@ pub async fn handle_command(command: &Command, state: SharedState) -> Result<Str
                 )
             })?;
 
-            // Actually index the database
-            let schema_index = db_manager.index_database().await?;
+            db_manager.reindex().await?;
+            let schema_index = db_manager.get_schema_index().await;
 
             let table_count = schema_index.tables.len();
             let column_count: usize = schema_index.tables.values().map(|t| t.columns.len()).sum();
@@ -449,12 +449,26 @@ Examples:
             // This is a natural language query - process it using LLM
             let state_guard = state.read().await;
 
+            if is_greeting_query(text) {
+                let backend = state_guard
+                    .database_manager
+                    .as_ref()
+                    .map(|db_manager| db_manager.backend());
+                return Ok(greeting_response(backend));
+            }
+
             // Check if database is connected
             let db_manager = state_guard.database_manager.as_ref().ok_or_else(|| {
                 SchemaForgeError::InvalidInput(
                     "Not connected to any database. Use /connect first.".to_string(),
                 )
             })?;
+
+            let schema_index = ensure_schema_index_loaded(db_manager).await?;
+
+            if is_table_list_request(text) {
+                return Ok(format_table_list(&schema_index, db_manager.backend()));
+            }
 
             // Check if an LLM provider is configured
             let current_provider = state_guard.get_current_provider()
@@ -471,8 +485,7 @@ Examples:
                 })?
                 .clone();
 
-            // Get schema context
-            let schema_context = db_manager.get_context_for_llm().await;
+            let schema_context = schema_index.format_for_llm();
 
             // Get configured model for this provider
             let model = state_guard.get_model(&current_provider);
@@ -501,6 +514,107 @@ Examples:
             Ok(format!("SQL:\n{}\n\nResults:\n{}", sql_query, results))
         }
     }
+}
+
+async fn ensure_schema_index_loaded(
+    db_manager: &crate::database::manager::DatabaseManager,
+) -> Result<crate::database::schema::SchemaIndex> {
+    let schema_index = db_manager.get_schema_index().await;
+    if !schema_index.tables.is_empty() {
+        return Ok(schema_index);
+    }
+
+    db_manager.reindex().await?;
+    Ok(db_manager.get_schema_index().await)
+}
+
+fn is_greeting_query(text: &str) -> bool {
+    matches!(
+        normalize_query_text(text).as_str(),
+        "hi"
+            | "hello"
+            | "hey"
+            | "greetings"
+            | "good morning"
+            | "good afternoon"
+            | "good evening"
+    )
+}
+
+fn greeting_response(
+    backend: Option<crate::database::connection::DatabaseBackend>,
+) -> String {
+    match backend {
+        Some(backend) => format!(
+            "Hello. You're connected to {}. I can list tables, run SQL directly, or use /config ollama for natural-language queries.",
+            backend
+        ),
+        None => "Hello. Connect a database with /connect <url>, then I can list tables, run SQL directly, or use /config ollama for natural-language queries.".to_string(),
+    }
+}
+
+fn is_table_list_request(text: &str) -> bool {
+    matches!(
+        normalize_query_text(text).as_str(),
+        "list tables"
+            | "list all tables"
+            | "list the tables"
+            | "show tables"
+            | "show all tables"
+            | "what tables exist"
+            | "which tables exist"
+            | "what are the tables"
+            | "what tables are there"
+            | "what tables do i have"
+            | "which tables are in the database"
+            | "which tables do i have"
+    )
+}
+
+fn format_table_list(
+    schema_index: &crate::database::schema::SchemaIndex,
+    backend: crate::database::connection::DatabaseBackend,
+) -> String {
+    let tables: Vec<String> = schema_index
+        .tables_only()
+        .into_iter()
+        .map(|table| table.name.clone())
+        .collect();
+    let views: Vec<String> = schema_index
+        .views()
+        .into_iter()
+        .map(|view| view.name.clone())
+        .collect();
+
+    if tables.is_empty() && views.is_empty() {
+        return format!("No tables found in the connected {} database.", backend);
+    }
+
+    let mut response = format!("{} schema:\n", backend);
+    if !tables.is_empty() {
+        response.push_str("Tables:\n");
+        for table in tables {
+            response.push_str(&format!("  - {}\n", table));
+        }
+    }
+    if !views.is_empty() {
+        response.push_str("Views:\n");
+        for view in views {
+            response.push_str(&format!("  - {}\n", view));
+        }
+    }
+
+    response.trim_end().to_string()
+}
+
+fn normalize_query_text(text: &str) -> String {
+    text.to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_alphanumeric() || ch.is_whitespace() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Format an error for display
@@ -738,5 +852,19 @@ mod tests {
     fn test_config_hint_for_ollama() {
         assert_eq!(config_hint("ollama"), "/config ollama");
         assert_eq!(config_hint("openai"), "/config openai <api-key>");
+    }
+
+    #[test]
+    fn test_greeting_query_detection() {
+        assert!(is_greeting_query("hi"));
+        assert!(is_greeting_query("Good evening!"));
+        assert!(!is_greeting_query("show me users"));
+    }
+
+    #[test]
+    fn test_table_list_request_detection() {
+        assert!(is_table_list_request("list all tables"));
+        assert!(is_table_list_request("Which tables do I have?"));
+        assert!(!is_table_list_request("list all users"));
     }
 }
