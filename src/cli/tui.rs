@@ -34,6 +34,7 @@ const HEADER_LOGO: [&str; 5] = [
     "│   │╰──╯│   │",
     "╰───┴────┴───╯",
 ];
+const TRANSCRIPT_BOTTOM_PADDING: usize = 2;
 
 #[derive(Clone, Copy)]
 enum TranscriptKind {
@@ -443,7 +444,7 @@ impl TuiApp {
     }
 
     fn render_transcript(&mut self, frame: &mut Frame, area: Rect) {
-        let lines = self.transcript_lines();
+        let lines = self.transcript_display_lines();
         let visible_height = area.height.saturating_sub(2) as usize;
         let max_scroll = lines.len().saturating_sub(visible_height) as u16;
 
@@ -572,6 +573,14 @@ impl TuiApp {
             )));
         }
 
+        lines
+    }
+
+    fn transcript_display_lines(&self) -> Vec<Line<'static>> {
+        let mut lines = self.transcript_lines();
+        for _ in 0..TRANSCRIPT_BOTTOM_PADDING {
+            lines.push(Line::from(""));
+        }
         lines
     }
 
@@ -1163,5 +1172,27 @@ mod tests {
 
         app.jump_to_bottom();
         assert!(app.follow_output);
+    }
+
+    #[test]
+    fn test_transcript_display_lines_add_bottom_padding() {
+        let state = crate::config::create_shared_state();
+        let app = TuiApp::new(state);
+
+        let display_lines = app.transcript_display_lines();
+        let content_lines = app.transcript_lines();
+
+        assert_eq!(
+            display_lines.len(),
+            content_lines.len() + TRANSCRIPT_BOTTOM_PADDING
+        );
+        assert_eq!(
+            display_lines[display_lines.len() - 1],
+            Line::from("")
+        );
+        assert_eq!(
+            display_lines[display_lines.len() - 2],
+            Line::from("")
+        );
     }
 }
