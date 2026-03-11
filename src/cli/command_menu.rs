@@ -1,11 +1,11 @@
-//! Inline slash command palette for the persistent TUI.
+//! Docked slash command menu for the persistent TUI.
 
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,35 +100,19 @@ pub fn apply_command(command: &CommandItem) -> String {
     }
 }
 
-pub fn render_command_palette(
+pub fn render_command_dock(
     frame: &mut Frame,
     area: Rect,
     commands: &[CommandItem],
     state: &mut ListState,
 ) {
-    let popup_area = centered_rect(78, 68, area);
-    frame.render_widget(Clear, popup_area);
-
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(6),
-            Constraint::Length(3),
+            Constraint::Min(3),
+            Constraint::Length(2),
         ])
-        .split(popup_area);
-
-    let header = Paragraph::new(Line::from(vec![
-        Span::styled("/", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::raw(" Slash Commands"),
-    ]))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan)),
-    )
-    .alignment(Alignment::Center);
-    frame.render_widget(header, sections[0]);
+        .split(area);
 
     let items = if commands.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
@@ -155,7 +139,7 @@ pub fn render_command_palette(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan))
-                .title(" Commands "),
+                .title(" Slash Commands "),
         )
         .highlight_style(
             Style::default()
@@ -163,7 +147,7 @@ pub fn render_command_palette(
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
-    frame.render_stateful_widget(list, sections[1], state);
+    frame.render_stateful_widget(list, sections[0], state);
 
     let example = state
         .selected()
@@ -173,33 +157,11 @@ pub fn render_command_palette(
     let footer = Paragraph::new(Line::from(example))
         .block(
             Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .title(" Example "),
+                .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                .border_style(Style::default().fg(Color::Cyan)),
         )
-        .alignment(Alignment::Center)
         .wrap(Wrap { trim: true });
-    frame.render_widget(footer, sections[2]);
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let vertical = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(area);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(vertical[1])[1]
+    frame.render_widget(footer, sections[1]);
 }
 
 #[cfg(test)]
