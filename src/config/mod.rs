@@ -7,6 +7,7 @@ pub mod storage;
 
 use crate::database::manager::DatabaseManager;
 use crate::error::Result;
+use crate::llm::provider::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -21,6 +22,8 @@ pub struct AppState {
     pub models: HashMap<String, String>,
     /// Current selected provider
     pub current_provider: Option<String>,
+    /// In-memory multi-turn conversation history for the active session
+    pub conversation_history: Vec<Message>,
 }
 
 impl AppState {
@@ -33,12 +36,14 @@ impl AppState {
                 api_keys: config.api_keys,
                 models: config.models,
                 current_provider: config.current_provider,
+                conversation_history: Vec::new(),
             },
             Err(_) => Self {
                 database_manager: None,
                 api_keys: HashMap::new(),
                 models: storage::Config::default_models(),
                 current_provider: None,
+                conversation_history: Vec::new(),
             },
         }
     }
@@ -46,6 +51,7 @@ impl AppState {
     /// Set the database manager
     pub fn set_database_manager(&mut self, manager: DatabaseManager) {
         self.database_manager = Some(manager);
+        self.clear_conversation_history();
     }
 
     /// Store an API key for a provider and save to disk
@@ -101,6 +107,25 @@ impl AppState {
     /// List all configured providers
     pub fn list_providers(&self) -> Vec<String> {
         self.api_keys.keys().cloned().collect()
+    }
+
+    /// Get the current in-memory conversation history
+    pub fn conversation_history(&self) -> Vec<Message> {
+        self.conversation_history.clone()
+    }
+
+    /// Append a message to the in-memory conversation history
+    pub fn push_conversation_message(&mut self, message: Message) {
+        self.conversation_history.push(message);
+        if self.conversation_history.len() > 12 {
+            let overflow = self.conversation_history.len() - 12;
+            self.conversation_history.drain(0..overflow);
+        }
+    }
+
+    /// Clear the in-memory conversation history
+    pub fn clear_conversation_history(&mut self) {
+        self.conversation_history.clear();
     }
 
     /// Save configuration to disk

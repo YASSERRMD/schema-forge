@@ -4,6 +4,7 @@
 //! to support multiple database types (PostgreSQL, MySQL, SQLite, MSSQL).
 
 use crate::error::{Result, SchemaForgeError};
+use oracle_rs::{Config as OracleConfig, Connection as OracleConnection};
 use sqlx::{
     mysql::MySqlPool,
     postgres::PgPool,
@@ -25,6 +26,8 @@ pub enum DatabaseBackend {
     MySQL,
     /// SQLite
     SQLite,
+    /// Oracle Database
+    Oracle,
     /// Microsoft SQL Server
     MSSQL,
 }
@@ -40,6 +43,8 @@ impl DatabaseBackend {
             Ok(DatabaseBackend::MySQL)
         } else if url_lower.starts_with("sqlite://") || url_lower.starts_with("sqlite:") || url_lower.ends_with(".db") || url_lower.ends_with(".sqlite") || url_lower.ends_with(".sqlite3") {
             Ok(DatabaseBackend::SQLite)
+        } else if url_lower.starts_with("oracle://") {
+            Ok(DatabaseBackend::Oracle)
         } else if url_lower.starts_with("mssql://") || url_lower.starts_with("sqlserver://") {
             Ok(DatabaseBackend::MSSQL)
         } else {
@@ -56,6 +61,7 @@ impl DatabaseBackend {
             DatabaseBackend::PostgreSQL => 5432,
             DatabaseBackend::MySQL => 3306,
             DatabaseBackend::SQLite => 0, // No port for file-based DB
+            DatabaseBackend::Oracle => 1521,
             DatabaseBackend::MSSQL => 1433,
         }
     }
@@ -66,6 +72,7 @@ impl DatabaseBackend {
             DatabaseBackend::PostgreSQL => "PostgreSQL",
             DatabaseBackend::MySQL => "MySQL",
             DatabaseBackend::SQLite => "SQLite",
+            DatabaseBackend::Oracle => "Oracle",
             DatabaseBackend::MSSQL => "Microsoft SQL Server",
         }
     }
@@ -84,6 +91,7 @@ impl DatabaseBackend {
             DatabaseBackend::PostgreSQL => Some("public"),
             DatabaseBackend::MySQL => Some(database_name_default_schema()),
             DatabaseBackend::SQLite => Some("main"),
+            DatabaseBackend::Oracle => None,
             DatabaseBackend::MSSQL => Some("dbo"),
         }
     }
@@ -104,6 +112,77 @@ fn sqlite_connection_string(url: &str) -> String {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OracleUrlConfig {
+    username: String,
+    password: String,
+    host: String,
+    port: u16,
+    service_name: String,
+}
+
+fn parse_oracle_url(url: &str) -> Result<OracleUrlConfig> {
+    let remainder = url.strip_prefix("oracle://").ok_or_else(|| {
+        SchemaForgeError::InvalidDatabaseUrl(format!(
+            "Oracle URLs must start with oracle://: {}",
+            url
+        ))
+    })?;
+    let (credentials, address) = remainder.rsplit_once('@').ok_or_else(|| {
+        SchemaForgeError::InvalidDatabaseUrl(format!(
+            "Oracle URLs must include credentials and host: {}",
+            url
+        ))
+    })?;
+    let (username, password) = credentials.split_once(':').ok_or_else(|| {
+        SchemaForgeError::InvalidDatabaseUrl(format!(
+            "Oracle URLs must include username and password: {}",
+            url
+        ))
+    })?;
+    let (host_port, service_name) = address.split_once('/').ok_or_else(|| {
+        SchemaForgeError::InvalidDatabaseUrl(format!(
+            "Oracle URLs must include a service name path: {}",
+            url
+        ))
+    })?;
+
+    if service_name.trim().is_empty() {
+        return Err(SchemaForgeError::InvalidDatabaseUrl(format!(
+            "Oracle service name cannot be empty: {}",
+            url
+        )));
+    }
+
+    let (host, port) = match host_port.rsplit_once(':') {
+        Some((host, port)) => {
+            let parsed_port = port.parse::<u16>().map_err(|_| {
+                SchemaForgeError::InvalidDatabaseUrl(format!(
+                    "Invalid Oracle port in URL: {}",
+                    url
+                ))
+            })?;
+            (host, parsed_port)
+        }
+        None => (host_port, DatabaseBackend::Oracle.default_port()),
+    };
+
+    if host.trim().is_empty() || username.trim().is_empty() {
+        return Err(SchemaForgeError::InvalidDatabaseUrl(format!(
+            "Oracle host and username cannot be empty: {}",
+            url
+        )));
+    }
+
+    Ok(OracleUrlConfig {
+        username: username.to_string(),
+        password: password.to_string(),
+        host: host.to_string(),
+        port,
+        service_name: service_name.to_string(),
+    })
+}
+
 impl FromStr for DatabaseBackend {
     type Err = SchemaForgeError;
 
@@ -112,6 +191,7 @@ impl FromStr for DatabaseBackend {
             "postgresql" | "postgres" | "pg" => Ok(DatabaseBackend::PostgreSQL),
             "mysql" | "mariadb" => Ok(DatabaseBackend::MySQL),
             "sqlite" | "sqlite3" => Ok(DatabaseBackend::SQLite),
+            "oracle" => Ok(DatabaseBackend::Oracle),
             "mssql" | "sqlserver" | "microsoft sql server" => Ok(DatabaseBackend::MSSQL),
             _ => Err(SchemaForgeError::UnsupportedDatabaseType(s.to_string())),
         }
@@ -127,7 +207,6 @@ impl std::fmt::Display for DatabaseBackend {
 /// Database connection pool wrapper
 ///
 /// This enum holds the actual database pool for the connected backend.
-#[derive(Clone)]
 pub enum DatabasePool {
     /// SQLite pool
     Sqlite(SqlitePool),
@@ -135,6 +214,8 @@ pub enum DatabasePool {
     Postgres(PgPool),
     /// MySQL pool
     MySql(MySqlPool),
+    /// Oracle connection
+    Oracle(OracleConnection),
 }
 
 impl DatabasePool {
@@ -144,6 +225,7 @@ impl DatabasePool {
             DatabasePool::Sqlite(_) => DatabaseBackend::SQLite,
             DatabasePool::Postgres(_) => DatabaseBackend::PostgreSQL,
             DatabasePool::MySql(_) => DatabaseBackend::MySQL,
+            DatabasePool::Oracle(_) => DatabaseBackend::Oracle,
         }
     }
 
@@ -170,6 +252,19 @@ impl DatabasePool {
                 let pool = MySqlPool::connect(url).await
                     .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
                 Ok(DatabasePool::MySql(pool))
+            }
+            DatabaseBackend::Oracle => {
+                let config = parse_oracle_url(url)?;
+                let connection = OracleConnection::connect_with_config(OracleConfig::new(
+                    config.host,
+                    config.port,
+                    config.service_name,
+                    config.username,
+                    config.password,
+                ))
+                .await
+                .map_err(|e| SchemaForgeError::db_connection_message(url, e.to_string()))?;
+                Ok(DatabasePool::Oracle(connection))
             }
             DatabaseBackend::MSSQL => {
                 // MSSQL support requires tiberius client - not yet implemented
@@ -212,6 +307,10 @@ impl DatabasePool {
                     .map_err(|e| SchemaForgeError::db_connection(url.to_string(), e))?;
                 Ok(DatabasePool::MySql(pool))
             }
+            DatabaseBackend::Oracle => {
+                let _ = max_connections;
+                Self::from_url(url).await
+            }
             DatabaseBackend::MSSQL => {
                 Err(SchemaForgeError::UnsupportedDatabaseType(
                     "MSSQL support not yet fully implemented".to_string()
@@ -244,6 +343,18 @@ impl DatabasePool {
                     .map_err(|e| SchemaForgeError::db_connection("test connection".to_string(), e))?;
                 Ok(())
             }
+            DatabasePool::Oracle(connection) => {
+                connection
+                    .query("SELECT 1 FROM DUAL", &[])
+                    .await
+                    .map_err(|e| {
+                        SchemaForgeError::db_connection_message(
+                            "test connection",
+                            e.to_string(),
+                        )
+                    })?;
+                Ok(())
+            }
         }
     }
 }
@@ -271,6 +382,10 @@ mod tests {
             DatabaseBackend::SQLite
         );
         assert_eq!(
+            DatabaseBackend::from_url("oracle://scott:tiger@localhost:1521/FREEPDB1").unwrap(),
+            DatabaseBackend::Oracle
+        );
+        assert_eq!(
             DatabaseBackend::from_url("test.db").unwrap(),
             DatabaseBackend::SQLite
         );
@@ -281,6 +396,7 @@ mod tests {
         assert_eq!(DatabaseBackend::PostgreSQL.default_port(), 5432);
         assert_eq!(DatabaseBackend::MySQL.default_port(), 3306);
         assert_eq!(DatabaseBackend::SQLite.default_port(), 0);
+        assert_eq!(DatabaseBackend::Oracle.default_port(), 1521);
         assert_eq!(DatabaseBackend::MSSQL.default_port(), 1433);
     }
 
@@ -299,6 +415,10 @@ mod tests {
             DatabaseBackend::SQLite
         );
         assert_eq!(
+            "oracle".parse::<DatabaseBackend>().unwrap(),
+            DatabaseBackend::Oracle
+        );
+        assert_eq!(
             "mssql".parse::<DatabaseBackend>().unwrap(),
             DatabaseBackend::MSSQL
         );
@@ -314,6 +434,7 @@ mod tests {
         assert_eq!(DatabaseBackend::PostgreSQL.to_string(), "PostgreSQL");
         assert_eq!(DatabaseBackend::MySQL.to_string(), "MySQL");
         assert_eq!(DatabaseBackend::SQLite.to_string(), "SQLite");
+        assert_eq!(DatabaseBackend::Oracle.to_string(), "Oracle");
         assert_eq!(DatabaseBackend::MSSQL.to_string(), "Microsoft SQL Server");
     }
 
@@ -324,5 +445,20 @@ mod tests {
             "sqlite:///tmp/schema-forge.db"
         );
         assert_eq!(sqlite_connection_string("test.db"), "sqlite://test.db");
+    }
+
+    #[test]
+    fn test_parse_oracle_url() {
+        let config = parse_oracle_url("oracle://scott:tiger@localhost:1521/FREEPDB1").unwrap();
+        assert_eq!(
+            config,
+            OracleUrlConfig {
+                username: "scott".to_string(),
+                password: "tiger".to_string(),
+                host: "localhost".to_string(),
+                port: 1521,
+                service_name: "FREEPDB1".to_string(),
+            }
+        );
     }
 }

@@ -24,6 +24,15 @@ pub enum SchemaForgeError {
         source: sqlx::Error,
     },
 
+    /// Database connection errors from non-sqlx drivers
+    #[error("Failed to connect to database: {url} ({message})")]
+    DatabaseConnectionMessage {
+        /// Connection URL that failed
+        url: String,
+        /// Driver-specific error message
+        message: String,
+    },
+
     /// Database query errors
     #[error("Database query failed: {query}")]
     DatabaseQuery {
@@ -32,6 +41,15 @@ pub enum SchemaForgeError {
         /// Underlying error
         #[source]
         source: sqlx::Error,
+    },
+
+    /// Database query errors from non-sqlx drivers
+    #[error("Database query failed: {query} ({message})")]
+    DatabaseQueryMessage {
+        /// The query that failed
+        query: String,
+        /// Driver-specific error message
+        message: String,
     },
 
     /// Schema indexing errors
@@ -197,6 +215,22 @@ impl SchemaForgeError {
         Self::DatabaseQuery {
             query: query.into(),
             source,
+        }
+    }
+
+    /// Create a database connection error for drivers outside sqlx
+    pub fn db_connection_message(url: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::DatabaseConnectionMessage {
+            url: url.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Create a database query error for drivers outside sqlx
+    pub fn db_query_message(query: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::DatabaseQueryMessage {
+            query: query.into(),
+            message: message.into(),
         }
     }
 
