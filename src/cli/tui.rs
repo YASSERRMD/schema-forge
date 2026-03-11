@@ -8,7 +8,10 @@ use crate::cli::commands::{self, Command, CommandType, format_error};
 use crate::config::SharedState;
 use crate::error::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+        MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{
         EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -138,11 +141,14 @@ impl TuiApp {
                 continue;
             }
 
-            let Event::Key(key) = event::read()? else {
-                continue;
+            let should_submit = match event::read()? {
+                Event::Key(key) => self.handle_key_event(key),
+                Event::Mouse(mouse) => {
+                    self.handle_mouse_event(mouse);
+                    false
+                }
+                _ => false,
             };
-
-            let should_submit = self.handle_key_event(key);
             if should_submit {
                 self.busy = true;
                 terminal.draw(|frame| self.render(frame))?;
@@ -175,7 +181,9 @@ impl TuiApp {
                 false
             }
             KeyCode::Up => {
-                if self.should_show_command_palette() {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.scroll_up(2);
+                } else if self.should_show_command_palette() {
                     self.select_previous_command();
                 } else {
                     self.history_previous();
@@ -183,7 +191,9 @@ impl TuiApp {
                 false
             }
             KeyCode::Down => {
-                if self.should_show_command_palette() {
+                if key.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.scroll_down(2);
+                } else if self.should_show_command_palette() {
                     self.select_next_command();
                 } else {
                     self.history_next();
@@ -216,6 +226,14 @@ impl TuiApp {
                 self.move_cursor_right();
                 false
             }
+            KeyCode::Home if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.jump_to_top();
+                false
+            }
+            KeyCode::End if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.jump_to_bottom();
+                false
+            }
             KeyCode::Home => {
                 self.cursor = 0;
                 false
@@ -225,15 +243,22 @@ impl TuiApp {
                 false
             }
             KeyCode::PageUp => {
-                self.follow_output = false;
-                self.scroll = self.scroll.saturating_sub(4);
+                self.scroll_up(4);
                 false
             }
             KeyCode::PageDown => {
-                self.scroll = self.scroll.saturating_add(4);
+                self.scroll_down(4);
                 false
             }
             _ => false,
+        }
+    }
+
+    fn handle_mouse_event(&mut self, mouse: MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => self.scroll_up(3),
+            MouseEventKind::ScrollDown => self.scroll_down(3),
+            _ => {}
         }
     }
 
@@ -564,7 +589,7 @@ impl TuiApp {
         if self.should_show_command_palette() {
             "Enter select  |  Tab insert  |  Up/Down navigate  |  Esc clear"
         } else {
-            "Enter send  |  Up/Down history  |  Ctrl+C quit  |  PgUp/PgDn scroll"
+            "Enter send  |  Up/Down history  |  Ctrl+Up/Down scroll  |  PgUp/PgDn or wheel"
         }
     }
 
@@ -727,6 +752,25 @@ impl TuiApp {
         if let Some(current) = self.input[self.cursor..].chars().next() {
             self.cursor += current.len_utf8();
         }
+    }
+
+    fn scroll_up(&mut self, amount: u16) {
+        self.follow_output = false;
+        self.scroll = self.scroll.saturating_sub(amount);
+    }
+
+    fn scroll_down(&mut self, amount: u16) {
+        self.follow_output = false;
+        self.scroll = self.scroll.saturating_add(amount);
+    }
+
+    fn jump_to_top(&mut self) {
+        self.follow_output = false;
+        self.scroll = 0;
+    }
+
+    fn jump_to_bottom(&mut self) {
+        self.follow_output = true;
     }
 
     fn header_summary(&self) -> String {
@@ -1054,7 +1098,7 @@ fn marker_position(body: &str, marker: &str) -> Option<usize> {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
@@ -1063,7 +1107,7 @@ fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
 
 fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
     Ok(())
 }
@@ -1102,5 +1146,22 @@ mod tests {
         assert_eq!(sections.lead, "Hello there.");
         assert!(sections.sql.is_none());
         assert!(sections.results.is_none());
+    }
+
+    #[test]
+    fn test_scroll_helpers_update_follow_output() {
+        let state = crate::config::create_shared_state();
+        let mut app = TuiApp::new(state);
+
+        app.scroll_down(6);
+        assert_eq!(app.scroll, 6);
+        assert!(!app.follow_output);
+
+        app.scroll_up(2);
+        assert_eq!(app.scroll, 4);
+        assert!(!app.follow_output);
+
+        app.jump_to_bottom();
+        assert!(app.follow_output);
     }
 }
